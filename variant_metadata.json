@@ -1,0 +1,224 @@
+{
+  "rs75961395": {
+    "gene": "CFTR",
+    "associated_disease": "Cystic Fibrosis",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 332.67,
+    "frequency_in_cases": 0.4,
+    "frequency_in_controls": 0.002
+  },
+  "rs113993960": {
+    "gene": "CFTR",
+    "associated_disease": "Cystic Fibrosis",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 617.19,
+    "frequency_in_cases": 0.65,
+    "frequency_in_controls": 0.003
+  },
+  "rs121908745": {
+    "gene": "CFTR",
+    "associated_disease": "Cystic Fibrosis",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 537.92,
+    "frequency_in_cases": 0.35,
+    "frequency_in_controls": 0.001
+  },
+  "rs121909001": {
+    "gene": "MSH6",
+    "associated_disease": "Lynch Syndrome",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 166.42,
+    "frequency_in_cases": 0.2,
+    "frequency_in_controls": 0.0015
+  },
+  "rs121909298": {
+    "gene": "HTT",
+    "associated_disease": "Huntington Disease",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 89991.0,
+    "frequency_in_cases": 0.9,
+    "frequency_in_controls": 0.0001
+  },
+  "rs121909299": {
+    "gene": "HTT",
+    "associated_disease": "Huntington Disease",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 2222.11,
+    "frequency_in_cases": 0.1,
+    "frequency_in_controls": 5e-05
+  },
+  "rs128625267": {
+    "gene": "DMD",
+    "associated_disease": "Duchenne Muscular Dystrophy",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 16362.82,
+    "frequency_in_cases": 0.45,
+    "frequency_in_controls": 5e-05
+  },
+  "rs128625268": {
+    "gene": "DMD",
+    "associated_disease": "Duchenne Muscular Dystrophy",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 13461.0,
+    "frequency_in_cases": 0.35,
+    "frequency_in_controls": 4e-05
+  },
+  "rs398123529": {
+    "gene": "DMD",
+    "associated_disease": "Duchenne Muscular Dystrophy",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 8333.08,
+    "frequency_in_cases": 0.2,
+    "frequency_in_controls": 3e-05
+  },
+  "rs334": {
+    "gene": "HBB",
+    "associated_disease": "Sickle Cell Disease",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 1497.0,
+    "frequency_in_cases": 0.75,
+    "frequency_in_controls": 0.002
+  },
+  "rs33930165": {
+    "gene": "HBB",
+    "associated_disease": "Sickle Cell Disease",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 352.76,
+    "frequency_in_cases": 0.15,
+    "frequency_in_controls": 0.0005
+  },
+  "rs35497102": {
+    "gene": "HBB",
+    "associated_disease": "Sickle Cell Disease",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 370.26,
+    "frequency_in_cases": 0.1,
+    "frequency_in_controls": 0.0003
+  },
+  "rs80357906": {
+    "gene": "BRCA1",
+    "associated_disease": "Hereditary Breast Cancer",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 537.92,
+    "frequency_in_cases": 0.35,
+    "frequency_in_controls": 0.001
+  },
+  "rs80356920": {
+    "gene": "BRCA1",
+    "associated_disease": "Hereditary Breast Cancer",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 416.33,
+    "frequency_in_cases": 0.25,
+    "frequency_in_controls": 0.0008
+  },
+  "rs80359550": {
+    "gene": "BRCA2",
+    "associated_disease": "Hereditary Breast Cancer",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 285.29,
+    "frequency_in_cases": 0.3,
+    "frequency_in_controls": 0.0015
+  },
+  "rs80358947": {
+    "gene": "BRCA2",
+    "associated_disease": "Hereditary Breast Cancer",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 416.42,
+    "frequency_in_cases": 0.2,
+    "frequency_in_controls": 0.0006
+  },
+  "rs63750217": {
+    "gene": "MLH1",
+    "associated_disease": "Lynch Syndrome",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 213.86,
+    "frequency_in_cases": 0.3,
+    "frequency_in_controls": 0.002
+  },
+  "rs63750449": {
+    "gene": "MSH2",
+    "associated_disease": "Lynch Syndrome",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 184.85,
+    "frequency_in_cases": 0.25,
+    "frequency_in_controls": 0.0018
+  },
+  "rs121434629": {
+    "gene": "PMS2",
+    "associated_disease": "Lynch Syndrome",
+    "pathogenicity": "Pathogenic",
+    "odds_ratio": 176.29,
+    "frequency_in_cases": 0.15,
+    "frequency_in_controls": 0.001
+  },
+  "rs1800054": {
+    "gene": "ATM",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.15
+  },
+  "rs1800055": {
+    "gene": "ATM",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.12
+  },
+  "rs1800056": {
+    "gene": "ATM",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.1
+  },
+  "rs1042522": {
+    "gene": "TP53",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.25
+  },
+  "rs17878362": {
+    "gene": "TP53",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.02
+  },
+  "rs1625895": {
+    "gene": "TP53",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.18
+  },
+  "rs4986850": {
+    "gene": "BRCA1",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.08
+  },
+  "rs799917": {
+    "gene": "BRCA1",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.3
+  },
+  "rs16942": {
+    "gene": "BRCA1",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.28
+  },
+  "rs169547": {
+    "gene": "BRCA2",
+    "associated_disease": null,
+    "pathogenicity": "Benign",
+    "odds_ratio": 1.0,
+    "population_frequency": 0.22
+  }
+}
