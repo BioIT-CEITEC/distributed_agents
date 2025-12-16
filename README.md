@@ -33,7 +33,12 @@ A privacy-preserving distributed system for rare disease genetic variant analysi
 ### 1. Install Dependencies
 
 ```bash
-pip install pandas numpy scipy flask pydantic-ai pydantic httpx python-dotenv
+pip install -r requirements.txt
+```
+
+Or install manually:
+```bash
+pip install pydantic-ai pydantic pandas numpy scipy flask httpx python-dotenv openai
 ```
 
 ### 2. Configure API Key
@@ -129,6 +134,7 @@ The system prompt guides the agent to prioritize important queries and stop earl
 ```
 BioAgents/
 ├── .env                        # API key (create this, don't commit)
+├── requirements.txt            # Python dependencies
 ├── generate_patient_data.py    # Creates synthetic patient data
 ├── node_agent.py               # Node agent (Flask + pydantic-ai)
 ├── orchestrator_agent.py       # Basic orchestrator agent
@@ -302,11 +308,16 @@ LOG_RESPONSES = False
 
 ## Tech Stack
 
-- **pydantic-ai** — LLM agent framework with typed outputs
-- **Flask** — HTTP endpoints for node agents
-- **OpenAI GPT-4o** — Query interpretation and response synthesis
-- **scipy** — Fisher's exact test implementation
-- **pandas/numpy** — Data manipulation
+| Package | Purpose | Version |
+|---------|---------|---------|
+| **pydantic-ai** | LLM agent framework with typed outputs | ≥0.0.20 |
+| **pydantic** | Data validation and serialization | ≥2.0.0 |
+| **Flask** | HTTP endpoints for node agents | ≥3.0.0 |
+| **httpx** | Async HTTP client for orchestrator | ≥0.27.0 |
+| **OpenAI** | GPT-4o API client | ≥1.0.0 |
+| **scipy** | Fisher's exact test | ≥1.11.0 |
+| **pandas** | Data manipulation | ≥2.0.0 |
+| **numpy** | Numerical operations | ≥1.24.0 |
 
 ## Extended Mode: Investigative Agent
 
