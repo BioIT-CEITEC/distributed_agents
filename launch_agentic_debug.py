@@ -97,34 +97,33 @@ async def test_agents_debug():
     print("Testing node agents...")
     print("="*50)
     
-    client = httpx.AsyncClient(timeout=5.0)
     all_healthy = True
     
-    for i in range(1, 5):
-        try:
-            response = await client.get(f"http://localhost:{5000 + i}/health")
-            if response.status_code == 200:
-                data = response.json()
-                print(f"✓ node{i}: healthy (agent: {data.get('agent', 'unknown')})")
-            else:
-                print(f"✗ node{i}: unhealthy (status {response.status_code})")
-                all_healthy = False
-        except Exception as e:
-            print(f"✗ node{i}: not responding ({str(e)})")
-            all_healthy = False
-            
-            # Show recent log entries
-            print(f"\n  Checking logs for node{i}...")
+    async with httpx.AsyncClient(timeout=5.0) as client:  # Use async with
+        for i in range(1, 5):
             try:
-                with open(f"node{i}_stderr.log", "r") as f:
-                    stderr_content = f.read()
-                    if stderr_content:
-                        print(f"  Last error output:")
-                        print("  " + "\n  ".join(stderr_content.split("\n")[-10:]))
-            except:
-                pass
+                response = await client.get(f"http://localhost:{5000 + i}/health")
+                if response.status_code == 200:
+                    data = response.json()
+                    print(f"✓ node{i}: healthy (agent: {data.get('agent', 'unknown')})")
+                else:
+                    print(f"✗ node{i}: unhealthy (status {response.status_code})")
+                    all_healthy = False
+            except Exception as e:
+                print(f"✗ node{i}: not responding ({str(e)})")
+                all_healthy = False
+                
+                # Show recent log entries
+                print(f"\n  Checking logs for node{i}...")
+                try:
+                    with open(f"node{i}_stderr.log", "r") as f:
+                        stderr_content = f.read()
+                        if stderr_content:
+                            print(f"  Last error output:")
+                            print("  " + "\n  ".join(stderr_content.split("\n")[-10:]))
+                except:
+                    pass
     
-    await client.aclose()
     return all_healthy
 
 
