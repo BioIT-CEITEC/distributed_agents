@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Launch the BioAgents Agentic System
-Starts all node agents and provides options for interaction
+Launch BioAgents Extended System
+- Node 1 = YOUR home node (direct patient access)
+- Nodes 2-4 = External nodes (aggregated stats only)
 """
 
 import subprocess
@@ -10,12 +11,22 @@ import signal
 import sys
 import os
 import asyncio
+import httpx
+import json
+import traceback
 
-def start_node_agents():
-    """Start all node agents"""
+
+from orchestrator_agent import ExtendedOrchestratorInterface
+
+
+def start_external_nodes():
+    """Start external node agents (nodes 2-4 only)"""
     processes = []
     
-    print("Starting BioAgents Agentic System...")
+    print("Starting BioAgents Extended System...")
+    print("-" * 50)
+    print("🏠 Node 1 = YOUR HOME NODE (direct patient access)")
+    print("🌐 Nodes 2-4 = External nodes (privacy-preserving)")
     print("-" * 50)
     
     # Check for required files
@@ -27,11 +38,11 @@ def start_node_agents():
     
     if not os.path.exists("variant_metadata.json"):
         print("Error: variant_metadata.json not found!")
-        print("Please run: python generate_patient_data.py")
         return None
     
-    # Start node agents
-    for i in range(1, 5):
+    # Start EXTERNAL nodes only (2, 3, 4)
+    # Node 1 is home node - accessed directly, not via HTTP
+    for i in range(2, 5):
         cmd = [
             sys.executable, 
             "node_agent.py",
@@ -40,7 +51,7 @@ def start_node_agents():
             f"patients_node{i}.csv"
         ]
         
-        print(f"Starting node{i} agent on port {5000 + i}...")
+        print(f"Starting external node{i} agent on port {5000 + i}...")
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -49,10 +60,12 @@ def start_node_agents():
         processes.append(process)
         time.sleep(0.5)
     
-    print("\n✓ All node agents started!")
-    print("\nNode agents running on:")
-    for i in range(1, 5):
-        print(f"  node{i}: http://localhost:{5000 + i}")
+    print(f"\n✓ External nodes started!")
+    print(f"\nNetwork configuration:")
+    print(f"  🏠 node1 (HOME): Direct access to patients_node1.csv")
+    print(f"  🌐 node2: http://localhost:5002 (external)")
+    print(f"  🌐 node3: http://localhost:5003 (external)")
+    print(f"  🌐 node4: http://localhost:5004 (external)")
     
     return processes
 
@@ -61,115 +74,145 @@ def stop_processes(processes):
     """Stop all processes"""
     if not processes:
         return
-    
-    print("\n\nStopping all node agents...")
+    print("\n\nStopping external node agents...")
     for p in processes:
         p.terminate()
-    
     for p in processes:
         try:
             p.wait(timeout=5)
         except subprocess.TimeoutExpired:
             p.kill()
-    
-    print("All node agents stopped.")
+    print("All agents stopped.")
 
 
-async def test_agents():
-    """Test that agents are responding"""
-    import httpx
-    
-    print("\n" + "="*50)
-    print("Testing node agents...")
-    print("="*50)
-    
+async def test_external_nodes():
+    """Test that external nodes are responding"""    
+    print("\nTesting external nodes...")
     client = httpx.AsyncClient(timeout=5.0)
     all_healthy = True
     
-    for i in range(1, 5):
+    for i in range(2, 5):
         try:
             response = await client.get(f"http://localhost:{5000 + i}/health")
             if response.status_code == 200:
-                data = response.json()
-                print(f"✓ node{i}: healthy (agent: {data.get('agent', 'unknown')})")
+                print(f"  ✓ node{i}: healthy")
             else:
-                print(f"✗ node{i}: unhealthy (status {response.status_code})")
+                print(f"  ✗ node{i}: unhealthy")
                 all_healthy = False
         except Exception as e:
-            print(f"✗ node{i}: not responding ({str(e)})")
+            print(f"  ✗ node{i}: not responding ({e})")
             all_healthy = False
     
     await client.aclose()
     return all_healthy
 
 
-async def run_interactive_session():
-    """Run the interactive orchestrator"""
-    from orchestrator_agent import OrchestratorInterface
+async def run_extended_session():
+    """Run the extended orchestrator session"""
     
-    node_urls = {
-        "node1": "http://localhost:5001",
+    external_nodes = {
         "node2": "http://localhost:5002",
         "node3": "http://localhost:5003",
         "node4": "http://localhost:5004"
     }
     
-    orchestrator = OrchestratorInterface(node_urls)
+    orchestrator = ExtendedOrchestratorInterface(
+        external_nodes,
+        "patients_node1.csv"  # Home node - direct access
+    )
     
     print("\n" + "="*70)
-    print("BioAgents Agentic System - Natural Language Interface")
+    print("🔬 BioAgents EXTENDED - Investigative Agent")
     print("="*70)
-    print("\nExample queries you can ask:")
-    print("  • Is CFTR rs113993960 significantly associated with Cystic Fibrosis?")
-    print("  • What variants co-occur with rs80357906 in breast cancer patients?")
-    print("  • Show me Fisher's test results for HBB rs334 and Sickle Cell Disease")
-    print("  • Which variants are linked to Lynch Syndrome?")
-    print("  • What's the odds ratio for rs121909298 in Huntington Disease?")
+    print("\n📋 YOUR CAPABILITIES:")
+    print("   • Direct access to YOUR patients (home node)")
+    print("   • Query external nodes for population statistics")
+    print("   • Autonomous investigation loops")
+    print("\n📝 EXAMPLE QUERIES:")
+    print("   • I suspect rs113993960 is causal for my CF patients. Investigate it.")
+    print("   • Which of my breast cancer patients have BRCA1 variants? Check external data too.")
+    print("   • Investigate rs334 for sickle cell - check my patients and find co-occurring variants.")
+    print("   • My patient node1_P0015 has CF - what variants might be relevant?")
     print("\nType 'exit' to quit\n")
     
     while True:
         try:
-            query = input("Your question: ").strip()
+            query = input("🔬 Investigation query: ").strip()
             
-            if query.lower() in ['exit', 'quit']:
+            if query.lower() == 'exit':
                 break
-            
             if not query:
                 continue
             
-            print("\n🤔 Thinking...")
-            result = await orchestrator.process_query(query)
+            print("\n🤖 Agent is investigating (autonomous loop)...\n")
             
-            print("\n" + "-"*50)
-            print("📊 RESPONSE")
-            print("-"*50)
+            result = await orchestrator.investigate(query)
             
-            print(f"\n💡 Interpretation:\n{result['interpretation']}")
-            print(f"\n📝 Summary:\n{result['summary']}")
+            print("="*70)
+            print("📊 INVESTIGATION COMPLETE")
+            print("="*70)
             
-            if result.get('detailed_results'):
-                print("\n🔬 Statistical Details:")
-                import json
-                details = result['detailed_results']
-                if isinstance(details, dict):
-                    for key, value in details.items():
-                        if key != 'combined_contingency':
-                            print(f"  • {key}: {value}")
+            # Summary
+            print(f"\n📝 Summary:")
+            print(f"   {result.get('investigation_summary', 'N/A')}")
             
-            if result.get('recommendations'):
-                print("\n💊 Recommendations:")
-                for rec in result['recommendations']:
-                    print(f"  • {rec}")
+            # Steps taken
+            steps = result.get('investigation_steps', [])
+            if steps:
+                print(f"\n🔄 Steps Taken ({len(steps)}):")
+                for i, step in enumerate(steps, 1):
+                    print(f"   {i}. {step}")
             
-            print(f"\n📡 Network: {result['nodes_with_data']}/{result['nodes_responded']} nodes had relevant data")
-            print("-"*50 + "\n")
+            # Affected patients
+            patients = result.get('affected_patients', [])
+            if patients:
+                print(f"\n👥 Your Affected Patients ({len(patients)}):")
+                for p in patients[:10]:
+                    if isinstance(p, dict):
+                        print(f"   • {p.get('patient_id', p)}: {p.get('disease', '')} "
+                              f"({'case' if p.get('has_disease') else 'control'})")
+                    else:
+                        print(f"   • {p}")
+            
+            # Statistical findings
+            stats = result.get('statistical_findings')
+            if stats:
+                print(f"\n📈 Statistical Findings:")
+                if isinstance(stats, dict):
+                    for k, v in stats.items():
+                        print(f"   • {k}: {v}")
+                else:
+                    print(f"   {stats}")
+            
+            # Co-occurring variants
+            covar = result.get('co_occurring_variants', [])
+            if covar:
+                print(f"\n🧬 Co-occurring Variants ({len(covar)}):")
+                for v in covar[:7]:
+                    rate = v.get('avg_co_occurrence_rate', 0)
+                    rate_str = f"{rate:.1%}" if isinstance(rate, float) else str(rate)
+                    print(f"   • {v.get('variant_id')} ({v.get('gene', '?')}) - "
+                          f"{v.get('pathogenicity', '?')} - co-occur rate: {rate_str}")
+            
+            # Recommendations
+            recs = result.get('recommendations', [])
+            if recs:
+                print(f"\n💡 Recommendations:")
+                for rec in recs:
+                    print(f"   • {rec}")
+            
+            # External nodes queried
+            ext = result.get('external_nodes_queried', 0)
+            if ext:
+                print(f"\n🌐 External nodes queried: {ext}")
+            
+            print("\n" + "="*70 + "\n")
             
         except KeyboardInterrupt:
             print("\n\nInterrupted by user")
             break
         except Exception as e:
-            print(f"❌ Error: {e}")
-            import traceback
+            print(f"\n❌ Error: {e}")
             traceback.print_exc()
     
     await orchestrator.close()
@@ -185,50 +228,33 @@ def main():
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    # Parse arguments
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--test-only":
-            # Just test if agents are running
-            asyncio.run(test_agents())
-            return
-        elif sys.argv[1] == "--orchestrator-only":
-            # Just run orchestrator (assumes nodes are already running)
-            try:
-                asyncio.run(run_interactive_session())
-            except KeyboardInterrupt:
-                print("\n\nGoodbye!")
-            return
-    
-    # Full launch
     try:
-        # Start node agents
-        processes = start_node_agents()
+        # Start external nodes
+        processes = start_external_nodes()
         if not processes:
             sys.exit(1)
         
-        # Wait for agents to initialize
-        print("\nWaiting for agents to initialize...")
+        # Wait for initialization
+        print("\nWaiting for external nodes to initialize...")
         time.sleep(3)
         
-        # Test agents
-        all_healthy = asyncio.run(test_agents())
+        # Test external nodes
+        all_healthy = asyncio.run(test_external_nodes())
         
         if not all_healthy:
-            print("\n⚠️  Warning: Some agents are not healthy")
-            print("You may experience issues with some queries")
+            print("\n⚠️  Warning: Some external nodes are not responding")
         
-        # Run interactive session
+        # Run extended session
         print("\n" + "="*50)
-        print("Ready for natural language queries!")
+        print("Ready for investigative queries!")
         print("="*50)
         
-        asyncio.run(run_interactive_session())
+        asyncio.run(run_extended_session())
         
     except KeyboardInterrupt:
         print("\n\nShutting down...")
     except Exception as e:
         print(f"\nError: {e}")
-        import traceback
         traceback.print_exc()
     finally:
         stop_processes(processes)
@@ -238,8 +264,11 @@ def main():
 if __name__ == "__main__":
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
-║                    BioAgents Agentic System                      ║
-║                 Natural Language Variant Analysis                 ║
+║           BioAgents EXTENDED - Investigative Agent               ║
+║                                                                  ║
+║   🏠 Home Node: Direct access to YOUR patient records            ║
+║   🌐 External: Privacy-preserving aggregated statistics          ║
+║   🔄 Autonomous: Agent loops until investigation complete        ║
 ╚══════════════════════════════════════════════════════════════════╝
     """)
     

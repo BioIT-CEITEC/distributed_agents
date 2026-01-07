@@ -10,6 +10,9 @@ import signal
 import sys
 import os
 import asyncio
+import httpx
+import traceback
+
 
 def start_node_agents_debug():
     """Start all node agents with visible output"""
@@ -89,8 +92,7 @@ def stop_processes_debug(processes):
 
 async def test_agents_debug():
     """Test that agents are responding and show errors"""
-    import httpx
-    
+
     print("\n" + "="*50)
     print("Testing node agents...")
     print("="*50)
@@ -162,7 +164,6 @@ def show_node_logs():
 
 async def test_single_query():
     """Test a single query and show detailed error info"""
-    import httpx
     
     print("\n" + "="*70)
     print("Testing Single Query to node1")
@@ -280,7 +281,6 @@ def main():
         print("\n\nShutting down...")
     except Exception as e:
         print(f"\nError: {e}")
-        import traceback
         traceback.print_exc()
     finally:
         stop_processes_debug(processes)

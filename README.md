@@ -1,6 +1,6 @@
 # BioAgents: Distributed Genetic Variant Analysis System
 
-A privacy-preserving distributed system for rare disease genetic variant analysis using Fisher's exact test. Built with pydantic-ai agents that coordinate across multiple clinical center nodes without sharing patient-level data.
+A privacy-preserving distributed system for rare disease genetic variant analysis. Built with pydantic-ai agents that coordinate across multiple clinical center nodes without sharing patient-level data.
 
 ## Architecture
 
