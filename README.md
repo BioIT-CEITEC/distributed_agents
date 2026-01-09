@@ -1,4 +1,5 @@
-# BioAgents: Distributed Genetic Variant Analysis System
+# BioAgents: Distributed Agents For Federated Analysis In Trusted Research Environments (TREs)
+ - Genetic Variant Analysis System
 
 A privacy-preserving distributed system for rare disease genetic variant analysis. Built with pydantic-ai agents that coordinate across multiple clinical center nodes without sharing patient-level data.
 
