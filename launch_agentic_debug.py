@@ -4,6 +4,7 @@ Launch the BioAgents Agentic System - DEBUG VERSION
 Shows all node output for debugging
 """
 
+import shutil
 import subprocess
 import time
 import signal
@@ -20,6 +21,10 @@ def start_node_agents_debug():
     
     print("Starting BioAgents Agentic System (DEBUG MODE)...")
     print("-" * 50)
+    
+    log_dir = "node_log"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     
     # Check for required files
     for i in range(1, 5):
@@ -46,8 +51,8 @@ def start_node_agents_debug():
         print(f"Starting node{i} agent on port {5000 + i}...")
         
         # Create log files
-        stdout_log = open(f"node{i}_stdout.log", "w")
-        stderr_log = open(f"node{i}_stderr.log", "w")
+        stdout_log = open(f"node_log/node{i}.log", "a", encoding="utf-8")
+        stderr_log = open(f"node_log/node{i}.err.log", "a", encoding="utf-8")
         
         process = subprocess.Popen(
             cmd,
@@ -64,8 +69,8 @@ def start_node_agents_debug():
     
     print("\n📝 Log files created:")
     for i in range(1, 5):
-        print(f"  node{i}_stdout.log")
-        print(f"  node{i}_stderr.log")
+        print(f"  node_log/node{i}.log")
+        print(f"  node_log/node{i}.err.log")
     
     return processes
 
@@ -116,7 +121,7 @@ async def test_agents_debug():
                 # Show recent log entries
                 print(f"\n  Checking logs for node{i}...")
                 try:
-                    with open(f"node{i}_stderr.log", "r") as f:
+                    with open(f"node_log/node{i}.err.log", "r") as f:
                         stderr_content = f.read()
                         if stderr_content:
                             print(f"  Last error output:")
@@ -124,6 +129,15 @@ async def test_agents_debug():
                 except:
                     pass
     
+    # Clean up node_log folder if all nodes are healthy
+    if all_healthy:
+        log_dir = "node_log"
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+            print(f"\n✓ All nodes healthy. Cleaned up {log_dir} folder.")
+    else:
+        print(f"\n⚠️  Some nodes unhealthy. Logs retained in node_log/ folder for debugging.")
+        
     return all_healthy
 
 
@@ -134,9 +148,9 @@ def show_node_logs():
     print("="*70)
     
     for i in range(1, 5):
-        print(f"\n--- node{i} stderr ---")
+        print(f"\n--- node_log/node{i} error log ---")
         try:
-            with open(f"node{i}_stderr.log", "r") as f:
+            with open(f"node_log/node{i}.err.log", "r") as f:
                 lines = f.readlines()
                 if lines:
                     # Show last 20 lines
@@ -149,7 +163,7 @@ def show_node_logs():
         
         print(f"\n--- node{i} stdout ---")
         try:
-            with open(f"node{i}_stdout.log", "r") as f:
+            with open(f"node_log/node{i}.log", "r") as f:
                 lines = f.readlines()
                 if lines:
                     # Show last 10 lines
@@ -196,7 +210,7 @@ async def test_single_query():
             # Show logs
             print("\n--- Checking node1 logs ---")
             time.sleep(0.5)  # Give it a moment to write
-            with open("node1_stderr.log", "r") as f:
+            with open("node_log/node1.err.log", "r") as f:
                 stderr = f.read()
                 if stderr:
                     print("\nSTDERR (last 50 lines):")
@@ -255,8 +269,8 @@ def main():
             print("\n" + "="*70)
             print("To view full logs, check:")
             for i in range(1, 5):
-                print(f"  - node{i}_stderr.log")
-                print(f"  - node{i}_stdout.log")
+                print(f"  - node_log/node{i}.err.log")
+                print(f"  - node_log/node{i}.log")
             print("="*70)
             
             response = input("\nContinue anyway? (yes/no): ").strip().lower()

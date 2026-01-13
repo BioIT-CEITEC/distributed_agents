@@ -5,6 +5,7 @@ Launch BioAgents Extended System
 - Nodes 2-4 = External nodes (aggregated stats only)
 """
 
+import shutil
 import subprocess
 import time
 import signal
@@ -22,6 +23,11 @@ from orchestrator_agent import ExtendedOrchestratorInterface
 def start_external_nodes():
     """Start external node agents (nodes 2-4 only)"""
     processes = []
+    
+    # Create node_log folder if it doesn't exist
+    log_dir = "node_log"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
     
     print("Starting BioAgents Extended System...")
     print("-" * 50)
@@ -52,10 +58,14 @@ def start_external_nodes():
         ]
         
         print(f"Starting external node{i} agent on port {5000 + i}...")
+        
+        # Log stdout/stderr to files in node_log folder
+        stdout_log = open(f"node_log/node{i}.log", "a", encoding="utf-8")
+        stderr_log = open(f"node_log/node{i}.err.log", "a", encoding="utf-8")
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=stdout_log,
+            stderr=stderr_log
         )
         processes.append(process)
         time.sleep(0.5)
@@ -85,26 +95,66 @@ def stop_processes(processes):
     print("All agents stopped.")
 
 
-async def test_external_nodes():
-    """Test that external nodes are responding"""    
+async def test_external_nodes(timeout_per_node: float = 15.0, interval: float = 0.2):
+    """Test that external nodes are responding"""
     print("\nTesting external nodes...")
-    client = httpx.AsyncClient(timeout=5.0)
+    client = httpx.AsyncClient()
     all_healthy = True
-    
+
+    async def wait_for_health(url: str, timeout: float, interval: float):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                r = await client.get(url, timeout=2.0)
+                if r.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+        return False
+
     for i in range(2, 5):
-        try:
-            response = await client.get(f"http://localhost:{5000 + i}/health")
-            if response.status_code == 200:
-                print(f"  ✓ node{i}: healthy")
-            else:
-                print(f"  ✗ node{i}: unhealthy")
-                all_healthy = False
-        except Exception as e:
-            print(f"  ✗ node{i}: not responding ({e})")
+        url = f"http://localhost:{5000 + i}/health"
+        ok = await wait_for_health(url, timeout_per_node, interval)
+        if ok:
+            print(f"  ✓ node{i}: healthy")
+        else:
+            print(f"  ✗ node{i}: not responding (still down after {timeout_per_node}s). See node_log/node{i}.log / .err.log")
             all_healthy = False
-    
+
     await client.aclose()
+    
+    # Clean up node_log folder if all nodes are healthy
+    if all_healthy:
+        log_dir = "node_log"
+        if os.path.exists(log_dir):
+            shutil.rmtree(log_dir)
+            print(f"\n✓ All nodes healthy. Cleaned up {log_dir} folder.")
+    else:
+        print(f"\n⚠️  Some nodes unhealthy. Logs retained in node_log/ folder for debugging.")
+    
     return all_healthy
+
+# async def test_external_nodes():
+#     """Test that external nodes are responding"""    
+#     print("\nTesting external nodes...")
+#     client = httpx.AsyncClient(timeout=15.0)
+#     all_healthy = True
+    
+#     for i in range(2, 5):
+#         try:
+#             response = await client.get(f"http://localhost:{5000 + i}/health")
+#             if response.status_code == 200:
+#                 print(f"  ✓ node{i}: healthy")
+#             else:
+#                 print(f"  ✗ node{i}: unhealthy")
+#                 all_healthy = False
+#         except Exception as e:
+#             print(f"  ✗ node{i}: not responding ({e})")
+#             all_healthy = False
+    
+#     await client.aclose()
+#     return all_healthy
 
 
 async def run_extended_session():
@@ -231,6 +281,7 @@ def main():
     try:
         # Start external nodes
         processes = start_external_nodes()
+        print(processes)
         if not processes:
             sys.exit(1)
         
