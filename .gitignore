@@ -4,3 +4,12 @@ patients_node1.csv
 patients_node2.csv
 patients_node3.csv
 patients_node4.csv
+*.csv
+*.tsv
+*.json
+
+# These folders contain temporary files
+__pycache__/
+logs/
+node_logs/
+testfolder/
