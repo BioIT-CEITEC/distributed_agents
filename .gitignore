@@ -1,9 +1,12 @@
+# Environment files
 .env
 
 patients_node1.csv
 patients_node2.csv
 patients_node3.csv
 patients_node4.csv
+
+# variable files
 *.csv
 *.tsv
 *.json
@@ -12,4 +15,5 @@ patients_node4.csv
 __pycache__/
 logs/
 node_logs/
+node_log/
 testfolder/
