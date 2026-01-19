@@ -7,13 +7,13 @@ A privacy-preserving distributed system for rare disease genetic variant analysi
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    User (Natural Language)                       │
+│                    User (Natural Language)                      │
 │        "Is CFTR rs113993960 associated with Cystic Fibrosis?"   │
 └───────────────────────────┬─────────────────────────────────────┘
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Orchestrator Agent (GPT-4o)                    │
-│  • Interprets queries • Broadcasts to nodes • Aggregates results │
+│                   Orchestrator Agent (GPT-4o)                   │
+│  • Interprets queries • Broadcasts to nodes • Aggregates results│
 └─────────┬─────────────┬─────────────┬─────────────┬─────────────┘
           ▼             ▼             ▼             ▼
      ┌────────┐    ┌────────┐   ┌────────┐    ┌────────┐
@@ -343,17 +343,17 @@ python launch_extended.py
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
-│                         YOU (Clinician)                         │
+│                         YOU (Clinician)                        │
 │    "I think rs113993960 is causal for my CF patients"          │
 └────────────────────────────┬───────────────────────────────────┘
                              ▼
 ┌────────────────────────────────────────────────────────────────┐
-│              Extended Orchestrator (Investigation Loop)         │
-│  1. Query external nodes for significance                       │
-│  2. Get co-occurring variants                                   │
-│  3. Check YOUR patients for those variants     ←──┐             │
-│  4. Decide: query more? (max 15 steps) ───────────┘             │
-│  5. Return findings when sufficient evidence                    │
+│              Extended Orchestrator (Investigation Loop)        │
+│  1. Query external nodes for significance                      │
+│  2. Get co-occurring variants                                  │
+│  3. Check YOUR patients for those variants     ←──┐            │
+│  4. Decide: query more? (max 15 steps) ───────────┘            │
+│  5. Return findings when sufficient evidence                   │
 └──────────┬─────────────────────────────────────┬───────────────┘
            │                                     │
     ┌──────▼──────┐                      ┌──────▼──────┐
