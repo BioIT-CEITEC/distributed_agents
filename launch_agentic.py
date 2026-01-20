@@ -167,8 +167,8 @@ async def run_extended_session():
     }
     
     orchestrator = ExtendedOrchestratorInterface(
-        external_nodes,
-        "patients_node1.csv"  # Home node - direct access
+        external_node_urls=external_nodes,
+        home_node_data_file="patients_node1.csv"  # Home node - direct access
     )
     
     print("\n" + "="*70)

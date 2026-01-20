@@ -17,3 +17,11 @@ logs/
 node_logs/
 node_log/
 testfolder/
+# Temporary scripts
+demo_agentic.py
+check_api.py
+diagnose_pydantic_ai.py
+
+# Temporary markdown files
+AGENTS.md
+GEMINI.md

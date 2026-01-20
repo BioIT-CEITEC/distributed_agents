@@ -66,6 +66,15 @@ class NodeAgentContext:
         # Load patient data
         self.patients = pd.read_csv(patient_data_file)
         
+        # Normalize headers
+        header_map = {
+            "PatientID": "patient_id", "SUBJ_NO": "patient_id", "pid": "patient_id", "Patient_Identifier": "patient_id",
+            "disease_name": "disease", "DX_T2D": "disease", "condition": "disease",
+            "disease_condition": "has_disease", "disease_status": "has_disease", "status": "has_disease", "diagnosis_status": "has_disease",
+            "Sex": "sex", "gender": "sex", "Gender": "sex"
+        }
+        self.patients.rename(columns=header_map, inplace=True)
+        
         # Convert boolean columns properly
         bool_columns = ['has_disease'] + [col for col in self.patients.columns if col.startswith('rs')]
         for col in bool_columns:
