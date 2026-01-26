@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import dotenv
+from schema_manager import SchemaManager
 
 dotenv.load_dotenv()
 
@@ -227,14 +228,9 @@ class ExtendedOrchestratorContext:
         self.logger.info(f"Loading home node data from {home_node_data_file}")
         self.home_patients = pd.read_csv(home_node_data_file)
         
-        # Normalize headers
-        header_map = {
-            "PatientID": "patient_id", "SUBJ_NO": "patient_id", "pid": "patient_id", "Patient_Identifier": "patient_id",
-            "disease_name": "disease", "DX_T2D": "disease", "condition": "disease",
-            "disease_condition": "has_disease", "disease_status": "has_disease", "status": "has_disease", "diagnosis_status": "has_disease",
-            "Sex": "sex", "gender": "sex", "Gender": "sex"
-        }
-        self.home_patients.rename(columns=header_map, inplace=True)
+        # Normalize headers and enforce privacy using SchemaManager
+        schema_manager = SchemaManager(self.logger)
+        self.home_patients = schema_manager.normalize_dataframe(self.home_patients)
         
         # Convert boolean columns
         bool_columns = ['has_disease'] + [col for col in self.home_patients.columns if col.startswith('rs')]

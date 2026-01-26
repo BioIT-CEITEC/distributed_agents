@@ -15,6 +15,7 @@ import logging
 from flask import Flask, request, jsonify
 import dotenv
 import asyncio
+from schema_manager import SchemaManager
 
 
 dotenv.load_dotenv()  
@@ -66,14 +67,9 @@ class NodeAgentContext:
         # Load patient data
         self.patients = pd.read_csv(patient_data_file)
         
-        # Normalize headers
-        header_map = {
-            "PatientID": "patient_id", "SUBJ_NO": "patient_id", "pid": "patient_id", "Patient_Identifier": "patient_id",
-            "disease_name": "disease", "DX_T2D": "disease", "condition": "disease",
-            "disease_condition": "has_disease", "disease_status": "has_disease", "status": "has_disease", "diagnosis_status": "has_disease",
-            "Sex": "sex", "gender": "sex", "Gender": "sex"
-        }
-        self.patients.rename(columns=header_map, inplace=True)
+        # Normalize headers and enforce privacy using SchemaManager
+        schema_manager = SchemaManager(self.logger)
+        self.patients = schema_manager.normalize_dataframe(self.patients)
         
         # Convert boolean columns properly
         bool_columns = ['has_disease'] + [col for col in self.patients.columns if col.startswith('rs')]

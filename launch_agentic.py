@@ -280,8 +280,14 @@ def main():
     
     try:
         # Start external nodes
+        # processes = start_external_nodes()
         processes = start_external_nodes()
-        print(processes)
+        # print(processes) # Suppressed to clean output
+        
+        # Suppress httpx info logs
+        import logging
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
         if not processes:
             sys.exit(1)
         
