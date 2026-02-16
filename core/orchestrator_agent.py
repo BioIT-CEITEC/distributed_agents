@@ -19,7 +19,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 import dotenv
-from schema_manager import SchemaManager
+from .schema_manager import SchemaManager
+from .schemas import SearchResponse, AnalysisResult
 
 dotenv.load_dotenv()
 
@@ -117,8 +118,8 @@ class ResponseLogger:
             "result": self._sanitize(result)
         }
         self.entries.append(entry)
-        self._save_to_file()
         self.logger.info(f"Investigation complete. Log saved to {self.log_file}")
+        self._save_to_file()
     
     def _sanitize(self, obj):
         """Convert objects to JSON-serializable format"""
@@ -150,6 +151,41 @@ class ResponseLogger:
 response_logger = ResponseLogger(enabled=LOG_RESPONSES)
 
 
+def extract_agent_result(result, expected_type=None, logger=None) -> Optional[Dict]:
+    """
+    Extract the actual data from a pydantic-ai AgentRunResult.
+    """
+    if logger:
+        logger.info(f"Extracting result from type: {type(result)}")
+    
+    if isinstance(result, dict):
+        return result
+    
+    if expected_type and isinstance(result, expected_type):
+        return result.model_dump()
+    
+    # Check for pydantic model instance
+    if hasattr(result, 'model_dump'):
+        return result.model_dump()
+
+    for attr_name in ['data', 'output', 'result', 'value', 'response']:
+        if hasattr(result, attr_name):
+            attr_value = getattr(result, attr_name)
+            
+            if attr_value is None:
+                continue
+                
+            if expected_type and isinstance(attr_value, expected_type):
+                return attr_value.model_dump()
+            elif isinstance(attr_value, dict):
+                return attr_value
+            elif hasattr(attr_value, 'model_dump'):
+                return attr_value.model_dump()
+            elif hasattr(attr_value, 'dict'):
+                return attr_value.dict()
+    return None
+
+
 # ============================================================================
 # Response Models
 # ============================================================================
@@ -176,29 +212,6 @@ class InvestigationResult(BaseModel):
     investigation_steps: List[str] = Field(default_factory=list)
     recommendations: Optional[List[str]] = None
     requires_further_investigation: bool = False
-
-
-def extract_agent_result(result, expected_type=None, logger=None) -> Optional[Dict]:
-    """Extract data from pydantic-ai AgentRunResult."""
-    if isinstance(result, dict):
-        return result
-    if expected_type and isinstance(result, expected_type):
-        return result.model_dump()
-    for attr_name in ['data', 'output', 'result', 'value', 'response']:
-        if hasattr(result, attr_name):
-            attr_value = getattr(result, attr_name)
-            if attr_value is None:
-                continue
-            if expected_type and isinstance(attr_value, expected_type):
-                return attr_value.model_dump()
-            if hasattr(attr_value, 'model_dump'):
-                try:
-                    return attr_value.model_dump()
-                except Exception:
-                    pass
-            if isinstance(attr_value, dict):
-                return attr_value
-    return None
 
 
 # ============================================================================
@@ -295,7 +308,9 @@ class ExtendedOrchestratorContext:
     
     async def query_external_node(self, node_id: str, query: str) -> Dict:
         """Query a single external node (aggregated stats only) with rate limiting"""
-        await self._rate_limit_external()
+        # For parallel calls, we handle rate limiting differently or assume the delay is per-node
+        # async sleep here might effectively serialize if called in loop, but with gather it's concurrent
+        # To avoid blasting all nodes instantly, we can add a small jitter or just rely on async IO
         
         try:
             url = f"{self.external_node_urls[node_id]}/query"
@@ -319,14 +334,9 @@ class ExtendedOrchestratorContext:
             return error_result
     
     async def broadcast_to_external_nodes(self, query: str) -> List[Dict]:
-        """Broadcast query to all external nodes with staggered timing"""
-        results = []
-        
-        # Query nodes sequentially with rate limiting to avoid 429s
-        for node_id in self.external_node_urls.keys():
-            result = await self.query_external_node(node_id, query)
-            results.append(result)
-        
+        """Broadcast query to all external nodes in parallel"""
+        tasks = [self.query_external_node(node_id, query) for node_id in self.external_node_urls.keys()]
+        results = await asyncio.gather(*tasks)
         return results
     
     async def close(self):
@@ -342,7 +352,7 @@ extended_orchestrator = Agent(
     deps_type=ExtendedOrchestratorContext,
     output_type=InvestigationResult,
     model_settings={
-        'max_tokens': 8192,  # Increase from default 3000
+        'max_tokens': 8192,
         'temperature': 0.7,
     },
     system_prompt="""You are an advanced clinical investigation agent for genetic variant analysis.
@@ -409,10 +419,6 @@ async def check_home_patients_for_variant(
     """
     Check which of YOUR patients (home node) have a specific variant.
     This gives you direct patient-level information.
-    
-    Args:
-        variant_id: The variant to check (e.g., 'rs113993960')
-        disease: Optional - filter to patients with specific disease
     """
     ctx.deps.log_step(f"Checking home patients for variant {variant_id}" + 
                       (f" with {disease}" if disease else ""))
@@ -467,11 +473,6 @@ async def check_home_patients_variant_combination(
     """
     Check which of YOUR patients have BOTH variants together.
     Useful for investigating co-occurrence in your own patient population.
-    
-    Args:
-        variant_a: First variant
-        variant_b: Second variant  
-        disease: Optional disease filter
     """
     ctx.deps.log_step(f"Checking home patients for combination {variant_a} + {variant_b}")
     
@@ -517,9 +518,6 @@ async def get_home_patient_details(
 ) -> Dict[str, Any]:
     """
     Get detailed information about a specific patient in YOUR home node.
-    
-    Args:
-        patient_id: The patient ID to look up
     """
     ctx.deps.log_step(f"Getting details for patient {patient_id}")
     
@@ -561,10 +559,6 @@ async def list_home_patients_with_disease(
 ) -> Dict[str, Any]:
     """
     List YOUR patients with a specific disease context.
-    
-    Args:
-        disease: The disease to filter by
-        only_affected: If True, only return patients who have the disease (cases)
     """
     ctx.deps.log_step(f"Listing home patients with {disease} (affected={only_affected})")
     
@@ -606,10 +600,6 @@ async def query_external_nodes_fisher(
     """
     Query EXTERNAL nodes for Fisher's exact test on variant-disease association.
     Returns aggregated statistics only (privacy-preserving).
-    
-    Args:
-        variant_id: Variant to test
-        disease: Disease to test association with
     """
     ctx.deps.log_step(f"Querying external nodes: Fisher test {variant_id} vs {disease}")
     
@@ -680,10 +670,6 @@ async def query_external_nodes_cooccurrence(
     """
     Query EXTERNAL nodes for variants that co-occur with the given variant.
     Returns aggregated co-occurrence statistics (privacy-preserving).
-    
-    Args:
-        variant_id: The primary variant to find co-occurrences for
-        disease: Disease context
     """
     ctx.deps.log_step(f"Querying external nodes: co-occurrence with {variant_id} in {disease}")
     
@@ -746,11 +732,6 @@ async def query_external_nodes_variant_pair(
     """
     Query EXTERNAL nodes for statistical significance of having BOTH variants.
     Use this after finding co-occurring variants to test if the combination is significant.
-    
-    Args:
-        variant_a: First variant
-        variant_b: Second variant
-        disease: Disease context
     """
     ctx.deps.log_step(f"Querying external nodes: significance of {variant_a}+{variant_b} in {disease}")
     
@@ -797,167 +778,111 @@ class ExtendedOrchestratorInterface:
             variant_metadata_file
         )
         self.logger = logging.getLogger("ExtendedOrchestratorInterface")
-    
-    async def investigate(self, user_query: str) -> Dict[str, Any]:
-        """
-        Run an agentic investigation based on user query.
-        The agent will autonomously decide how many steps to take.
-        """
-        try:
-            self.context.clear_steps()
-            self.logger.info(f"Starting investigation: {user_query}")
-            response_logger.log_llm_decision(f"Starting investigation: {user_query}")
-            
-            result = await extended_orchestrator.run(
-                user_query,
-                deps=self.context
-            )
-            
-            result_dict = extract_agent_result(result, InvestigationResult, self.logger)
-            
-            if result_dict:
-                # Add the investigation steps we tracked
-                result_dict['investigation_steps'] = self.context.investigation_steps
-                
-                # Log final result
-                response_logger.log_final_result(result_dict)
-                
-                return result_dict
-            else:
-                error_result = {
-                    "query": user_query,
-                    "investigation_summary": "Error: Could not parse agent response",
-                    "investigation_steps": self.context.investigation_steps
-                }
-                response_logger.log_final_result(error_result)
-                return error_result
         
-        except StopIteration as e:
-            # Max steps reached - return partial results
-            self.logger.warning(f"Investigation stopped: {e}")
-            partial_result = {
-                "query": user_query,
-                "investigation_summary": f"Investigation stopped after {MAX_INVESTIGATION_STEPS} steps. Partial findings gathered.",
-                "investigation_steps": self.context.investigation_steps,
-                "partial": True,
-                "stop_reason": str(e)
-            }
-            response_logger.log_final_result(partial_result)
-            return partial_result
+    async def investigate(self, query: str) -> Dict[str, Any]:
+        """
+        Run an autonomous investigation for the given query.
+        Returns the final result as a dictionary.
+        """
+        self.logger.info(f"Starting investigation for query: {query}")
+        self.context.clear_steps()
+        
+        try:
+            # Run the agent
+            result = await extended_orchestrator.run(query, deps=self.context)
+            
+            # Extract result
+            data = extract_agent_result(result, expected_type=InvestigationResult, logger=self.logger)
+            
+            if data:
+                response_logger.log_final_result(data)
+                return data
+            else:
+                self.logger.error("Could not extract structured result from agent")
+                return {
+                    "investigation_summary": "Error: Could not extract structured result.",
+                    "requires_further_investigation": True
+                }
                 
         except Exception as e:
-            self.logger.error(f"Investigation error: {e}")
+            self.logger.error(f"Investigation failed: {e}")
             import traceback
             traceback.print_exc()
-            error_result = {
-                "query": user_query,
-                "investigation_summary": f"Error: {str(e)}",
-                "investigation_steps": self.context.investigation_steps
+            return {
+                "investigation_summary": f"Error during investigation: {str(e)}",
+                "requires_further_investigation": True
             }
-            response_logger.log_final_result(error_result)
-            return error_result
-    
+        
     async def close(self):
+        """Close the orchestrator context"""
         await self.context.close()
-
-
-# ============================================================================
-# Interactive CLI
-# ============================================================================
-
-async def run_extended_interactive():
-    """Run interactive session with extended orchestrator"""
     
-    external_nodes = {
-        "node2": "http://localhost:5002",
-        "node3": "http://localhost:5003",
-        "node4": "http://localhost:5004"
-    }
-    
-    # Node1 is our HOME node - we have direct access
-    home_node_file = "patients_node1.csv"
-    
-    orchestrator = ExtendedOrchestratorInterface(
-        external_nodes,
-        home_node_file
-    )
-    
-    print("\n" + "="*70)
-    print("BioAgents EXTENDED - Investigative Agent")
-    print("="*70)
-    print("\nYou have DIRECT ACCESS to your home node (node1) patient data.")
-    print("External nodes (2-4) provide aggregated statistics only.")
-    print("\nExample investigation queries:")
-    print("  • I think rs113993960 might be causal for my CF patients. Investigate.")
-    print("  • Check if my breast cancer patients have BRCA1 rs80357906 and find co-occurring variants")
-    print("  • Investigate variant rs334 in sickle cell - check my patients and external evidence")
-    print("\nType 'exit' to quit\n")
-    
-    while True:
-        try:
-            query = input("🔬 Your investigation: ").strip()
+    async def run_session(self):
+        """Interactive session for the user"""
+        print("\n=== BioAgents Extended Orchestrator ===")
+        print("Type your research query (e.g., 'Check if rs113993960 is significant for breast cancer')")
+        print("Type 'exit' or 'quit' to stop.\n")
+        
+        while True:
+            try:
+                user_input = input("\nQuery> ")
+                if user_input.lower() in ['exit', 'quit']:
+                    break
+                
+                if not user_input.strip():
+                    continue
+                
+                print(f"\nThinking and investigating... (Max {MAX_INVESTIGATION_STEPS} steps)")
+                self.context.clear_steps()
+                
+                # Run the agent
+                result = await extended_orchestrator.run(user_input, deps=self.context)
+                
+                # Extract and print result
+                data = extract_agent_result(result, expected_type=InvestigationResult)
+                
+                if data:
+                    print("\n=== Investigation Result ===")
+                    print(f"Summary: {data.get('investigation_summary')}\n")
+                    
+                    if data.get('statistical_findings'):
+                        print("Statistical Findings:")
+                        print(json.dumps(data.get('statistical_findings'), indent=2))
+                    
+                    if data.get('recommendations'):
+                        print("\nRecommendations:")
+                        for rec in data.get('recommendations'):
+                            print(f"- {rec}")
+                    
+                    response_logger.log_final_result(data)
+                else:
+                    print("\nError: Could not extract structured result from agent.")
+                    print(f"Raw Result: {result}")
             
-            if query.lower() == 'exit':
+            except KeyboardInterrupt:
                 break
-            if not query:
-                continue
-            
-            print("\n🤖 Investigating (agent will loop autonomously)...\n")
-            
-            result = await orchestrator.investigate(query)
-            
-            print("="*70)
-            print("📊 INVESTIGATION RESULTS")
-            print("="*70)
-            
-            print(f"\n📝 Summary:\n{result.get('investigation_summary', 'N/A')}")
-            
-            if result.get('investigation_steps'):
-                print(f"\n🔄 Investigation Steps ({len(result['investigation_steps'])}):")
-                for i, step in enumerate(result['investigation_steps'], 1):
-                    print(f"   {i}. {step}")
-            
-            if result.get('affected_patients'):
-                print(f"\n👥 Your Affected Patients:")
-                for p in result['affected_patients'][:10]:
-                    print(f"   • {p}")
-            
-            if result.get('statistical_findings'):
-                print(f"\n📈 Statistical Findings:")
-                print(json.dumps(result['statistical_findings'], indent=2, default=str))
-            
-            if result.get('co_occurring_variants'):
-                print(f"\n🧬 Co-occurring Variants Found:")
-                for v in result['co_occurring_variants'][:5]:
-                    print(f"   • {v.get('variant_id')} ({v.get('gene')}) - rate: {v.get('avg_co_occurrence_rate', 'N/A'):.2%}")
-            
-            if result.get('recommendations'):
-                print(f"\n💡 Recommendations:")
-                for rec in result['recommendations']:
-                    print(f"   • {rec}")
-            
-            print("\n" + "="*70 + "\n")
-            
-        except KeyboardInterrupt:
-            print("\n\nInterrupted")
-            break
-        except Exception as e:
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    await orchestrator.close()
-    print("\nGoodbye!")
-
+            except Exception as e:
+                print(f"Error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        await self.context.close()
+        print("\nSession closed.")
 
 if __name__ == "__main__":
     import sys
     
-    if len(sys.argv) > 1 and sys.argv[1] == "--demo":
-        asyncio.run(run_extended_interactive())
-    else:
-        print("Extended Orchestrator with Home Node + Investigation Loop")
-        print("\nUsage:")
-        print("  python orchestrator_extended.py --demo")
-        print("\nMake sure external node agents (5002-5004) are running")
-        print("Node1 data (patients_node1.csv) is used as your home node")
+    # Default configuration
+    EXTERNAL_NODES = {
+        "node2": "http://localhost:8002",
+        "node3": "http://localhost:8003",
+        "node4": "http://localhost:8004"
+    }
+    
+    HOME_DATA = "nodes/node1/patients_node1.csv" # Updated default path
+    
+    interface = ExtendedOrchestratorInterface(EXTERNAL_NODES, HOME_DATA)
+    try:
+        asyncio.run(interface.run_session())
+    except KeyboardInterrupt:
+        pass

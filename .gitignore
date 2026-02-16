@@ -25,3 +25,12 @@ diagnose_pydantic_ai.py
 # Temporary markdown files
 AGENTS.md
 GEMINI.md
+tasks.md
+PLAN.md
+project_summary.md
+
+# Temporary word files
+*.docx
+
+# IDE Agent Rules
+# .agent/ .agent/

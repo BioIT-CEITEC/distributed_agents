@@ -13,6 +13,7 @@ class SchemaManager:
     STD_PATIENT_ID = "patient_id"
     STD_DISEASE = "disease"
     STD_HAS_DISEASE = "has_disease"
+    STD_VARIANTS = "variants"
     
     # Common variations for distinct clinical fields
     _PATIENT_ID_PATTERNS = [
@@ -48,6 +49,14 @@ class SchemaManager:
         r"(?i)^.*medical_?condition.*$"
     ]
     
+    # Variant Summary Column (e.g. "rs123;rs456")
+    _VARIANT_SUMMARY_PATTERNS = [
+        r"(?i)^.*variants?(_id)?.*$",
+        r"(?i)^.*genotypes?.*$",
+        r"(?i)^.*mutations?.*$",
+        r"(?i)^.*snps?.*$"
+    ]
+
     # Sex/Gender (to be preserved)
     _SEX_PATTERNS = [r"(?i)^sex$", r"(?i)^gender$"]
     
@@ -93,6 +102,7 @@ class SchemaManager:
         mapping[self._find_match(original_cols, self._PATIENT_ID_PATTERNS)] = self.STD_PATIENT_ID
         mapping[self._find_match(original_cols, self._DISEASE_NAME_PATTERNS)] = self.STD_DISEASE
         mapping[self._find_match(original_cols, self._DISEASE_STATUS_PATTERNS)] = self.STD_HAS_DISEASE
+        mapping[self._find_match(original_cols, self._VARIANT_SUMMARY_PATTERNS)] = self.STD_VARIANTS
         
         # Optional: Map Sex if found
         sex_col = self._find_match(original_cols, self._SEX_PATTERNS)

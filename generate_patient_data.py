@@ -276,7 +276,11 @@ def main():
         df = generate_patient_cohort(node_id, total_patients=500, 
                                     regional_variation=regional_variations[i-1])
     
-        filename = f"patients_{node_id}"
+        # Ensure output directory exists
+        import os
+        os.makedirs(f"nodes/{node_id}", exist_ok=True)
+        
+        filename = f"nodes/{node_id}/patients_{node_id}"
         df.to_csv(f"{filename}.csv", index=False) # Files are saved in CSV format
         
         # Options to save in other formats:

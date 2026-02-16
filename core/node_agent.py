@@ -15,8 +15,15 @@ import logging
 from flask import Flask, request, jsonify
 import dotenv
 import asyncio
-from schema_manager import SchemaManager
+import os
+import sys
 
+# Ensure we can import from potential sibling packages if run directly
+# sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from .schema_manager import SchemaManager
+from .schemas import SearchResponse, AnalysisResult
+from skills.node_search.crawler import Crawler
 
 dotenv.load_dotenv()  
 
@@ -71,6 +78,28 @@ class NodeAgentContext:
         schema_manager = SchemaManager(self.logger)
         self.patients = schema_manager.normalize_dataframe(self.patients)
         
+        # Check if we have a summary 'variants' column but no individual 'rs' columns
+        if 'variants' in self.patients.columns:
+            existing_rs = [c for c in self.patients.columns if c.startswith('rs')]
+            if len(existing_rs) == 0:
+                self.logger.info("Exploding 'variants' summary column to individual rsID columns...")
+                
+                # 1. Collect all unique variants
+                all_variants = set()
+                for v_str in self.patients['variants'].dropna():
+                    if isinstance(v_str, str):
+                        for v in v_str.split(';'):
+                            if v.strip():
+                                all_variants.add(v.strip())
+                
+                self.logger.info(f"Found {len(all_variants)} unique variants to expand.")
+                
+                # 2. Create boolean columns
+                for v_id in all_variants:
+                    self.patients[v_id] = self.patients['variants'].apply(
+                        lambda x: v_id in x.split(';') if isinstance(x, str) else False
+                    )
+        
         # Convert boolean columns properly
         bool_columns = ['has_disease'] + [col for col in self.patients.columns if col.startswith('rs')]
         for col in bool_columns:
@@ -91,6 +120,16 @@ class NodeAgentContext:
         self.logger.info(f"Node {node_id} initialized with {len(self.patients)} patients, "
                         f"{len(self.diseases)} diseases, {len(self.variant_columns)} variants")
 
+        # Initialize Crawler for semantic search (using the node directory based on data file location)
+        node_dir = os.path.dirname(patient_data_file)
+        self.crawler = Crawler(node_dir)
+        self.logger.info(f"Crawler initialized for directory: {node_dir}")
+
+    def cleanup(self):
+        """Cleanup resources"""
+        if self.crawler:
+            self.crawler.close()
+
 
 # Helper function to convert numpy types to Python types
 def to_python_type(value):
@@ -109,21 +148,17 @@ def to_python_type(value):
 def extract_agent_result(result, logger=None) -> Optional[Dict]:
     """
     Extract the actual data from a pydantic-ai AgentRunResult.
-    Handles different versions of the pydantic-ai API.
     """
     if logger:
         logger.info(f"Extracting result from type: {type(result)}")
         logger.info(f"Result attributes: {dir(result)}")
     
-    # Already a dict
     if isinstance(result, dict):
         return result
     
-    # Already a NodeResponse
     if isinstance(result, NodeResponse):
         return result.model_dump()
     
-    # Try various attribute names used in different pydantic-ai versions
     for attr_name in ['data', 'output', 'result', 'value', 'response']:
         if hasattr(result, attr_name):
             attr_value = getattr(result, attr_name)
@@ -142,24 +177,13 @@ def extract_agent_result(result, logger=None) -> Optional[Dict]:
             elif hasattr(attr_value, 'dict'):
                 return attr_value.dict()
     
-    # Try to access as if it's the output directly (some versions)
+    # Try to access as if it's the output directly
     if hasattr(result, 'model_dump'):
         try:
             return result.model_dump()
         except Exception as e:
             if logger:
                 logger.warning(f"model_dump() failed: {e}")
-    
-    # Last resort: try to convert to dict
-    if hasattr(result, '__dict__'):
-        if logger:
-            logger.info(f"Trying __dict__: {result.__dict__}")
-        # Check if there's a nested result object
-        for key, value in result.__dict__.items():
-            if isinstance(value, NodeResponse):
-                return value.model_dump()
-            elif isinstance(value, dict) and 'node_id' in value:
-                return value
     
     return None
 
@@ -170,7 +194,7 @@ node_agent = Agent(
     deps_type=NodeAgentContext,
     output_type=NodeResponse,
     model_settings={
-        'max_tokens': 8192,  # Increase from default
+        'max_tokens': 8192,
     },
     system_prompt="""You are a node agent in a distributed biomedical data network. 
     You have access to local patient data with genetic variants and disease information.
@@ -193,6 +217,7 @@ node_agent = Agent(
     - perform_fisher_test: Run Fisher's exact test for variant-disease association
     - find_co_occurring_variants: Find variants that co-occur with a given variant
     - get_variant_frequencies: Get variant frequencies across diseases
+    - semantic_search: Search deeply for files relevant to a query
     
     Always be precise about what data you have and don't have.
     If you don't have specific data requested, set has_data=False and explain what's missing."""
@@ -212,6 +237,24 @@ async def check_available_data(ctx: RunContext[NodeAgentContext]) -> Dict[str, A
 
 
 @node_agent.tool
+async def semantic_search(ctx: RunContext[NodeAgentContext], query: str) -> Dict[str, Any]:
+    """
+    Search strictly for files in the node's local directory that match the semantic meaning of the query.
+    Returns a list of file paths.
+    """
+    try:
+        results = ctx.deps.crawler.semantic_search(query)
+        return {
+            "node_id": ctx.deps.node_id,
+            "query": query,
+            "found_files": results,
+            "count": len(results)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@node_agent.tool
 async def perform_fisher_test(
     ctx: RunContext[NodeAgentContext],
     variant_id: str,
@@ -219,28 +262,22 @@ async def perform_fisher_test(
 ) -> Dict[str, Any]:
     """Perform Fisher's exact test for variant-disease association"""
     
-    # Check if we have the disease
     if disease not in ctx.deps.diseases:
         return {"error": f"No data for disease: {disease}"}
     
-    # Check if we have the variant
     if variant_id not in ctx.deps.variant_columns:
         return {"error": f"No data for variant: {variant_id}"}
     
-    # Filter for disease
     disease_data = ctx.deps.patients[ctx.deps.patients['disease'] == disease]
     
-    # Build contingency table - convert to Python bool for comparison
     A = int(len(disease_data[(disease_data[variant_id] == True) & (disease_data['has_disease'] == True)]))
     B = int(len(disease_data[(disease_data[variant_id] == True) & (disease_data['has_disease'] == False)]))
     C = int(len(disease_data[(disease_data[variant_id] == False) & (disease_data['has_disease'] == True)]))
     D = int(len(disease_data[(disease_data[variant_id] == False) & (disease_data['has_disease'] == False)]))
     
-    # Calculate Fisher's test
     contingency = [[A, B], [C, D]]
     odds_ratio, p_value = fisher_exact(contingency)
     
-    # Calculate confidence interval
     if A > 0 and B > 0 and C > 0 and D > 0:
         log_or = np.log(odds_ratio)
         se = np.sqrt(1/A + 1/B + 1/C + 1/D)
@@ -250,7 +287,6 @@ async def perform_fisher_test(
         ci_lower = 0.0
         ci_upper = float('inf') if odds_ratio > 1 else 1.0
     
-    # Get variant info
     variant_info = ctx.deps.variant_metadata.get(variant_id, {})
     
     return {
@@ -280,14 +316,12 @@ async def find_co_occurring_variants(
 ) -> Dict[str, Any]:
     """Find variants that co-occur with the given variant in disease cases"""
     
-    # Check data availability
     if disease not in ctx.deps.diseases:
         return {"error": f"No data for disease: {disease}"}
     
     if variant_id not in ctx.deps.variant_columns:
         return {"error": f"No data for variant: {variant_id}"}
     
-    # Get patients with the disease and variant
     disease_data = ctx.deps.patients[ctx.deps.patients['disease'] == disease]
     target_patients = disease_data[
         (disease_data['has_disease'] == True) & 
@@ -306,7 +340,6 @@ async def find_co_occurring_variants(
         if other_variant == variant_id:
             continue
         
-        # Convert to int explicitly
         co_occur_count = int(target_patients[other_variant].sum())
         
         if co_occur_count > 0:
@@ -322,7 +355,6 @@ async def find_co_occurring_variants(
                     "pathogenicity": metadata.get("pathogenicity", "Unknown")
                 })
     
-    # Sort by co-occurrence rate
     co_occurring.sort(key=lambda x: x["co_occurrence_rate"], reverse=True)
     
     return {
@@ -410,10 +442,6 @@ class NodeAgentServer:
                     node_agent.run(query_text, deps=self.context)
                 )
                 
-                # Log the raw result for debugging
-                self.logger.info(f"Raw result type: {type(result)}")
-                self.logger.info(f"Raw result attributes: {[a for a in dir(result) if not a.startswith('_')]}")
-                
                 # Use the improved extraction function
                 response_dict = extract_agent_result(result, self.logger)
                 
@@ -421,24 +449,11 @@ class NodeAgentServer:
                     self.logger.info(f"Successfully extracted response: {list(response_dict.keys())}")
                     return jsonify(response_dict)
                 else:
-                    # Fallback: try to get as much info as possible
-                    self.logger.warning(f"Could not extract response from: {type(result)}")
-                    self.logger.warning(f"Result repr: {repr(result)[:500]}")
-                    
-                    # Try one more thing: access .data directly and log what we get
-                    if hasattr(result, 'data'):
-                        data_val = result.data
-                        self.logger.warning(f"result.data type: {type(data_val)}, value: {repr(data_val)[:500]}")
-                    
                     return jsonify({
                         "node_id": self.context.node_id,
                         "has_data": False,
-                        "message": f"Could not extract structured response. Result type: {type(result).__name__}",
-                        "results": None,
-                        "debug_info": {
-                            "result_type": str(type(result)),
-                            "attributes": [a for a in dir(result) if not a.startswith('_')]
-                        }
+                        "message": f"Could not extract structured response.",
+                        "results": None
                     })
                     
             except Exception as e:
@@ -452,16 +467,24 @@ class NodeAgentServer:
                     "results": None
                 }), 500
     
+    def cleanup(self):
+        """Cleanup resources"""
+        if self.context:
+            self.context.cleanup()
+            
     def run(self):
-        self.logger.info(f"Starting node agent server on port {self.port}")
-        self.app.run(host='0.0.0.0', port=self.port, debug=False)
+        try:
+            self.logger.info(f"Starting node agent server on port {self.port}")
+            self.app.run(host='0.0.0.0', port=self.port, debug=False)
+        finally:
+            self.cleanup()
 
 
 if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 4:
-        print("Usage: python node_agent.py <node_id> <port> <data_file>")
+        print("Usage: python -m core.node_agent <node_id> <port> <data_file>")
         sys.exit(1)
     
     node_id = sys.argv[1]
@@ -469,4 +492,15 @@ if __name__ == "__main__":
     data_file = sys.argv[3]
     
     server = NodeAgentServer(node_id, port, data_file)
+    
+    # Handle graceful shutdown
+    import signal
+    def signal_handler(sig, frame):
+        print(f"Node {node_id} received shutdown signal")
+        server.cleanup()
+        sys.exit(0)
+        
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     server.run()

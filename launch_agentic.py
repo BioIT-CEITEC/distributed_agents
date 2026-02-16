@@ -17,7 +17,7 @@ import json
 import traceback
 
 
-from orchestrator_agent import ExtendedOrchestratorInterface
+from core.orchestrator_agent import ExtendedOrchestratorInterface
 
 
 def start_external_nodes():
@@ -37,9 +37,9 @@ def start_external_nodes():
     
     # Check for required files
     for i in range(1, 5):
-        if not os.path.exists(f"patients_node{i}.csv"):
-            print(f"Error: patients_node{i}.csv not found!")
-            print("Please run: python generate_patient_data.py")
+        if not os.path.exists(f"nodes/node{i}/patients_node{i}.csv"):
+            print(f"Error: nodes/node{i}/patients_node{i}.csv not found!")
+            print("Please ensure data is migrated to nodes/ directory.")
             return None
     
     if not os.path.exists("variant_metadata.json"):
@@ -51,10 +51,10 @@ def start_external_nodes():
     for i in range(2, 5):
         cmd = [
             sys.executable, 
-            "node_agent.py",
+            "-m", "core.node_agent",
             f"node{i}",
             str(5000 + i),
-            f"patients_node{i}.csv"
+            f"nodes/node{i}/patients_node{i}.csv"
         ]
         
         print(f"Starting external node{i} agent on port {5000 + i}...")
@@ -126,10 +126,13 @@ async def test_external_nodes(timeout_per_node: float = 15.0, interval: float = 
     
     # Clean up node_log folder if all nodes are healthy
     if all_healthy:
-        log_dir = "node_log"
-        if os.path.exists(log_dir):
-            shutil.rmtree(log_dir)
-            print(f"\n✓ All nodes healthy. Cleaned up {log_dir} folder.")
+        # On Windows, we cannot delete files that are open by the subprocesses.
+        # Keeping logs is safer anyway.
+        # log_dir = "node_log"
+        # if os.path.exists(log_dir):
+        #     shutil.rmtree(log_dir)
+        #     print(f"\n✓ All nodes healthy. Cleaned up {log_dir} folder.")
+        pass
     else:
         print(f"\n⚠️  Some nodes unhealthy. Logs retained in node_log/ folder for debugging.")
     
@@ -168,7 +171,7 @@ async def run_extended_session():
     
     orchestrator = ExtendedOrchestratorInterface(
         external_node_urls=external_nodes,
-        home_node_data_file="patients_node1.csv"  # Home node - direct access
+        home_node_data_file="nodes/node1/patients_node1.csv"  # Home node - direct access
     )
     
     print("\n" + "="*70)
