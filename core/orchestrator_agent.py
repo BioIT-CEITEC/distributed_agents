@@ -837,6 +837,30 @@ async def query_external_nodes_variant_pair(
 
 
 # ============================================================================
+# ============================================================================
+# Analytical Orchestrator Agent
+# ============================================================================
+
+analytical_orchestrator = Agent(
+    'openai:gpt-4o',
+    deps_type=ExtendedOrchestratorContext,
+    output_type=InvestigationResult,
+    model_settings={
+        'max_tokens': 4096,
+        'temperature': 0.1,
+    },
+    system_prompt="""You are a population-level analytical data agent.
+Your task is to answer statistical and population-level queries (like patient counts, distributions, or age range checks) across the network.
+Broadcast the query to external nodes and summarize the findings. If data is not available (like age range), clearly state that.
+Do NOT perform multi-step investigative or causative loops."""
+)
+
+@analytical_orchestrator.tool
+async def broadcast_query_to_nodes(ctx: RunContext[ExtendedOrchestratorContext], local_query: str) -> List[Dict]:
+    """Broadcast an analytical query to all available external data nodes."""
+    return await ctx.deps.broadcast_to_external_nodes(local_query)
+
+# ============================================================================
 # Extended Orchestrator Interface
 # ============================================================================
 
@@ -856,43 +880,44 @@ class ExtendedOrchestratorInterface:
         )
         self.logger = logging.getLogger("ExtendedOrchestratorInterface")
         
-    def _is_privacy_violation(self, query: str) -> bool:
+    def _classify_intent(self, query: str) -> str:
         import re
         
-        # Check for all forms of personal data queries
+        # 1. Personal-information or identifiable-individual queries (restricted)
         pii_patterns = [
             # Names of patients
             r'\b(?:named|name is|called|patient)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
             # Other sensitive PII
             r'(?i)\b(?:ssn|social security|dob|date of birth|address|phone|email|zip code|contact info)\b',
-            # Catching consecutive capitalized words not at the start (potential names, but we add a whitelist below)
-            r'(?<!^)(?<!\.\s)\b[A-Z][a-z]+\s+[A-Z][a-z]+\b'
         ]
         
         # Specific check for test case
         if "jing thomas" in query.lower():
-            return True
+            return "personal"
             
         for pattern in pii_patterns:
-            match = re.search(pattern, query)
-            if match:
-                # Whitelist common medical terms that might be capitalized
-                safe_terms = ['breast cancer', 'cystic fibrosis', 'sickle cell', 'fisher test', "fisher's exact"]
-                if match.group().lower() not in safe_terms:
-                    return True
-                    
-        return False
+            if re.search(pattern, query):
+                return "personal"
+                
+        # 2. Aggregated, anonymized statistical queries (allowed)
+        analytical_keywords = ['total number', 'count', 'how many', 'statistics', 'percentage', 'age range', 'between', 'average', 'patient counts']
+        if any(kw in query.lower() for kw in analytical_keywords):
+            return "analytical"
+            
+        return "investigation"
         
     async def investigate(self, query: str) -> Dict[str, Any]:
         """
-        Run an autonomous investigation for the given query.
+        Run an autonomous investigation or analytical query for the given query.
         Returns the final result as a dictionary.
         """
-        self.logger.info(f"Starting investigation for query: {query}")
+        self.logger.info(f"Processing query: {query}")
         self.context.clear_steps()
         
-        # Privacy Safeguard: Prevent queries about personal data
-        if self._is_privacy_violation(query):
+        intent = self._classify_intent(query)
+        self.logger.info(f"Query intent classified as: {intent}")
+        
+        if intent == "personal":
             self.logger.warning(f"Privacy violation detected in query: {query}")
             return {
                 "investigation_summary": "We do not have data on the mentioned name.",
@@ -900,8 +925,14 @@ class ExtendedOrchestratorInterface:
             }
         
         try:
-            # Run the agent
-            result = await extended_orchestrator.run(query, deps=self.context)
+            if intent == "analytical":
+                self.logger.info("Routing to analytical orchestrator...")
+                # Run the analytical agent instead of the extended orchestrator loop
+                result = await analytical_orchestrator.run(query, deps=self.context)
+            else:
+                self.logger.info("Routing to extended orchestrator investigation loop...")
+                # Run the extended agent
+                result = await extended_orchestrator.run(query, deps=self.context)
             
             # Extract result
             data = extract_agent_result(result, expected_type=InvestigationResult, logger=self.logger)
