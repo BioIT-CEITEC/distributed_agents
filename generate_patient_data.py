@@ -142,16 +142,16 @@ def generate_patient_cohort(node_id: str, total_patients: int = 500, regional_va
         
         # Generate cases (patients with the disease)
         for _ in range(n_cases):
-            # name, age, sex, height, weight, marital_status = generate_synthetic_personal_data()
+            name, age, sex, height, weight, marital_status = generate_synthetic_personal_data()
             case_int_node_ID = int_node_ID - 1
             patient = {
                 # Options to include personal data for cases
-                # names_header[case_int_node_ID]: name,
-                # age_header[case_int_node_ID]: age,
-                # sex_header[case_int_node_ID]: sex,
-                # height_header[case_int_node_ID]: height,
-                # weight_header[case_int_node_ID]: weight,
-                # marrital_status_header[case_int_node_ID]: marital_status,
+                names_header[case_int_node_ID]: name,
+                age_header[case_int_node_ID]: age,
+                sex_header[case_int_node_ID]: sex,
+                height_header[case_int_node_ID]: height,
+                weight_header[case_int_node_ID]: weight,
+                marrital_status_header[case_int_node_ID]: marital_status,
 
                 id_header[case_int_node_ID]: f"{node_id}_P{patient_id_counter:04d}",
                 "node_id": node_id,
@@ -177,16 +177,16 @@ def generate_patient_cohort(node_id: str, total_patients: int = 500, regional_va
         
         # Generate controls (patients without the disease)
         for _ in range(n_controls):
-            # name, age, sex, height, weight, marital_status = generate_synthetic_personal_data()
+            name, age, sex, height, weight, marital_status = generate_synthetic_personal_data()
             control_int_node_ID = int_node_ID - 1
             patient = {
                 # Options to include personal data for controls
-                # names_header[control_int_node_ID]: name,
-                # age_header[control_int_node_ID]: age,
-                # sex_header[control_int_node_ID]: sex,
-                # height_header[control_int_node_ID]: height,
-                # weight_header[control_int_node_ID]: weight,
-                # marrital_status_header[control_int_node_ID]: marital_status,
+                names_header[control_int_node_ID]: name,
+                age_header[control_int_node_ID]: age,
+                sex_header[control_int_node_ID]: sex,
+                height_header[control_int_node_ID]: height,
+                weight_header[control_int_node_ID]: weight,
+                marrital_status_header[control_int_node_ID]: marital_status,
 
                 id_header[control_int_node_ID]: f"{node_id}_P{patient_id_counter:04d}",
                 "node_id": node_id,
@@ -212,7 +212,7 @@ def generate_patient_cohort(node_id: str, total_patients: int = 500, regional_va
     variant_columns = list(PATHOGENIC_VARIANTS.keys()) + list(BENIGN_VARIANTS.keys())
     for col in variant_columns:
         if col in df.columns:
-            df[col] = df[col].fillna(False)
+            df[col] = df[col].fillna(False).infer_objects(copy=False).astype(bool)
     
     return df
 

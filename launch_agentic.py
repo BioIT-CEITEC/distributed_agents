@@ -20,8 +20,8 @@ import traceback
 from core.orchestrator_agent import ExtendedOrchestratorInterface
 
 
-def start_external_nodes():
-    """Start external node agents (nodes 2-4 only)"""
+def start_nodes():
+    """Start all node agents (nodes 1-4)"""
     processes = []
     
     # Create node_log folder if it doesn't exist
@@ -35,33 +35,43 @@ def start_external_nodes():
     print("🌐 Nodes 2-4 = External nodes (privacy-preserving)")
     print("-" * 50)
     
-    # Check for required files
+    # Check for required files - now checking directories
     for i in range(1, 5):
-        if not os.path.exists(f"nodes/node{i}/patients_node{i}.csv"):
-            print(f"Error: nodes/node{i}/patients_node{i}.csv not found!")
-            print("Please ensure data is migrated to nodes/ directory.")
+        node_dir = f"nodes/node{i}"
+        if not os.path.exists(node_dir):
+            print(f"Error: {node_dir} directory not found!")
+            return None
+        
+        # Check for at least one CSV file
+        csv_files = [f for f in os.listdir(node_dir) if f.endswith('.csv')]
+        if not csv_files:
+            print(f"Error: No CSV files found in {node_dir}!")
             return None
     
     if not os.path.exists("variant_metadata.json"):
         print("Error: variant_metadata.json not found!")
         return None
     
-    # Start EXTERNAL nodes only (2, 3, 4)
-    # Node 1 is home node - accessed directly, not via HTTP
-    for i in range(2, 5):
+    from core.discovery import wait_for_nodes, get_service_map
+    
+    expected_nodes = []
+    # Start ALL nodes (1, 2, 3, 4)
+    for i in range(1, 5):
+        node_id = f"node{i}"
+        expected_nodes.append(node_id)
         cmd = [
             sys.executable, 
             "-m", "core.node_agent",
-            f"node{i}",
-            str(5000 + i),
-            f"nodes/node{i}/patients_node{i}.csv"
+            node_id,
+            "0",
+            f"nodes/{node_id}"
         ]
         
-        print(f"Starting external node{i} agent on port {5000 + i}...")
+        print(f"Starting {node_id} agent on dynamic port...")
         
         # Log stdout/stderr to files in node_log folder
-        stdout_log = open(f"node_log/node{i}.log", "a", encoding="utf-8")
-        stderr_log = open(f"node_log/node{i}.err.log", "a", encoding="utf-8")
+        stdout_log = open(f"node_log/{node_id}.log", "a", encoding="utf-8")
+        stderr_log = open(f"node_log/{node_id}.err.log", "a", encoding="utf-8")
         process = subprocess.Popen(
             cmd,
             stdout=stdout_log,
@@ -70,12 +80,19 @@ def start_external_nodes():
         processes.append(process)
         time.sleep(0.5)
     
-    print(f"\n✓ External nodes started!")
+    print(f"\nWaiting for nodes to register their dynamic ports...")
+    if not wait_for_nodes(expected_nodes, timeout=60):
+        print("Error: Not all nodes registered in time!")
+        return processes
+        
+    registry = get_service_map()
+    print(f"\n✓ Nodes started and registered!")
     print(f"\nNetwork configuration:")
-    print(f"  🏠 node1 (HOME): Direct access to patients_node1.csv")
-    print(f"  🌐 node2: http://localhost:5002 (external)")
-    print(f"  🌐 node3: http://localhost:5003 (external)")
-    print(f"  🌐 node4: http://localhost:5004 (external)")
+    for nid in expected_nodes:
+        is_home = (nid == "node1")
+        icon = "🏠" if is_home else "🌐"
+        label = " (HOME)" if is_home else " (external)"
+        print(f"  {icon} {nid}{label}: {registry.get(nid, {}).get('url', 'Unknown')}")
     
     return processes
 
@@ -84,7 +101,7 @@ def stop_processes(processes):
     """Stop all processes"""
     if not processes:
         return
-    print("\n\nStopping external node agents...")
+    print("\n\nStopping node agents...")
     for p in processes:
         p.terminate()
     for p in processes:
@@ -95,9 +112,12 @@ def stop_processes(processes):
     print("All agents stopped.")
 
 
-async def test_external_nodes(timeout_per_node: float = 15.0, interval: float = 0.2):
-    """Test that external nodes are responding"""
-    print("\nTesting external nodes...")
+async def test_nodes(timeout_per_node: float = 15.0, interval: float = 0.2):
+    """Test that all nodes are responding"""
+    print("\nTesting nodes...")
+    from core.discovery import get_service_map
+    registry = get_service_map()
+    
     client = httpx.AsyncClient()
     all_healthy = True
 
@@ -113,25 +133,24 @@ async def test_external_nodes(timeout_per_node: float = 15.0, interval: float = 
             await asyncio.sleep(interval)
         return False
 
-    for i in range(2, 5):
-        url = f"http://localhost:{5000 + i}/health"
+    for i in range(1, 5):
+        node_id = f"node{i}"
+        if node_id not in registry:
+            print(f"  ✗ {node_id}: not registered!")
+            all_healthy = False
+            continue
+            
+        url = f"{registry[node_id]['url']}/health"
         ok = await wait_for_health(url, timeout_per_node, interval)
         if ok:
-            print(f"  ✓ node{i}: healthy")
+            print(f"  ✓ {node_id}: healthy")
         else:
-            print(f"  ✗ node{i}: not responding (still down after {timeout_per_node}s). See node_log/node{i}.log / .err.log")
+            print(f"  ✗ {node_id}: not responding (still down after {timeout_per_node}s). See node_log/{node_id}.log / .err.log")
             all_healthy = False
 
     await client.aclose()
     
-    # Clean up node_log folder if all nodes are healthy
     if all_healthy:
-        # On Windows, we cannot delete files that are open by the subprocesses.
-        # Keeping logs is safer anyway.
-        # log_dir = "node_log"
-        # if os.path.exists(log_dir):
-        #     shutil.rmtree(log_dir)
-        #     print(f"\n✓ All nodes healthy. Cleaned up {log_dir} folder.")
         pass
     else:
         print(f"\n⚠️  Some nodes unhealthy. Logs retained in node_log/ folder for debugging.")
@@ -163,15 +182,8 @@ async def test_external_nodes(timeout_per_node: float = 15.0, interval: float = 
 async def run_extended_session():
     """Run the extended orchestrator session"""
     
-    external_nodes = {
-        "node2": "http://localhost:5002",
-        "node3": "http://localhost:5003",
-        "node4": "http://localhost:5004"
-    }
-    
     orchestrator = ExtendedOrchestratorInterface(
-        external_node_urls=external_nodes,
-        home_node_data_file="nodes/node1/patients_node1.csv"  # Home node - direct access
+        home_node_data_directory="nodes/node1"  # Home node - direct access to directory
     )
     
     print("\n" + "="*70)
@@ -187,12 +199,14 @@ async def run_extended_session():
     print("   • Investigate rs334 for sickle cell - check my patients and find co-occurring variants.")
     print("   • My patient node1_P0015 has CF - what variants might be relevant?")
     print("\nType 'exit' to quit\n")
+    normal_exit = False
     
     while True:
         try:
             query = input("🔬 Investigation query: ").strip()
             
             if query.lower() == 'exit':
+                normal_exit = True
                 break
             if not query:
                 continue
@@ -267,8 +281,8 @@ async def run_extended_session():
         except Exception as e:
             print(f"\n❌ Error: {e}")
             traceback.print_exc()
-    
     await orchestrator.close()
+    return normal_exit
 
 
 def main():
@@ -281,10 +295,15 @@ def main():
     
     signal.signal(signal.SIGINT, signal_handler)
     
+    session_successful = False
+    
     try:
-        # Start external nodes
-        # processes = start_external_nodes()
-        processes = start_external_nodes()
+        from core.discovery import _save_registry
+        _save_registry({}) # Clear registry on startup
+        
+        # Start nodes
+        # processes = start_nodes()
+        processes = start_nodes()
         # print(processes) # Suppressed to clean output
         
         # Suppress httpx info logs
@@ -295,21 +314,21 @@ def main():
             sys.exit(1)
         
         # Wait for initialization
-        print("\nWaiting for external nodes to initialize...")
+        print("\nWaiting for nodes to initialize...")
         time.sleep(3)
         
-        # Test external nodes
-        all_healthy = asyncio.run(test_external_nodes())
+        # Test nodes
+        all_healthy = asyncio.run(test_nodes())
         
         if not all_healthy:
-            print("\n⚠️  Warning: Some external nodes are not responding")
+            print("\n⚠️  Warning: Some nodes are not responding")
         
         # Run extended session
         print("\n" + "="*50)
         print("Ready for investigative queries!")
         print("="*50)
         
-        asyncio.run(run_extended_session())
+        session_successful = asyncio.run(run_extended_session())
         
     except KeyboardInterrupt:
         print("\n\nShutting down...")
@@ -318,6 +337,13 @@ def main():
         traceback.print_exc()
     finally:
         stop_processes(processes)
+        if session_successful:
+            log_dir = "node_log"
+            if os.path.exists(log_dir):
+                shutil.rmtree(log_dir)
+                print(f"\n✓ Session complete. Cleaned up {log_dir} folder.")
+        else:
+            print("\n⚠️  Session did not complete normally. Logs retained in node_log/ folder for debugging.")
         print("\nGoodbye!")
 
 

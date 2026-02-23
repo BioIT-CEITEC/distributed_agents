@@ -28,9 +28,9 @@ def start_node_agents_debug():
     
     # Check for required files
     for i in range(1, 5):
-        if not os.path.exists(f"patients_node{i}.csv"):
-            print(f"Error: patients_node{i}.csv not found!")
-            print("Please run: python generate_patient_data.py")
+        node_dir = f"nodes/node{i}"
+        if not os.path.exists(node_dir):
+            print(f"Error: {node_dir} directory not found!")
             return None
     
     if not os.path.exists("variant_metadata.json"):
@@ -38,21 +38,26 @@ def start_node_agents_debug():
         print("Please run: python generate_patient_data.py")
         return None
     
+    from core.discovery import wait_for_nodes, get_service_map
+    expected_nodes = []
+    
     # Start node agents with visible output
     for i in range(1, 5):
+        node_id = f"node{i}"
+        expected_nodes.append(node_id)
         cmd = [
             sys.executable, 
-            "node_agent.py",
-            f"node{i}",
-            str(5000 + i),
-            f"patients_node{i}.csv"
+            "-m", "core.node_agent",
+            node_id,
+            "0",
+            f"nodes/{node_id}"
         ]
         
-        print(f"Starting node{i} agent on port {5000 + i}...")
+        print(f"Starting {node_id} agent on dynamic port...")
         
         # Create log files
-        stdout_log = open(f"node_log/node{i}.log", "a", encoding="utf-8")
-        stderr_log = open(f"node_log/node{i}.err.log", "a", encoding="utf-8")
+        stdout_log = open(f"node_log/{node_id}.log", "a", encoding="utf-8")
+        stderr_log = open(f"node_log/{node_id}.err.log", "a", encoding="utf-8")
         
         process = subprocess.Popen(
             cmd,
@@ -62,15 +67,21 @@ def start_node_agents_debug():
         processes.append((process, stdout_log, stderr_log))
         time.sleep(0.5)
     
-    print("\n✓ All node agents started!")
+    print("\nWaiting for nodes to register their dynamic ports...")
+    if not wait_for_nodes(expected_nodes, timeout=60):
+        print("Error: Not all nodes registered in time!")
+        return processes
+        
+    registry = get_service_map()
+    print("\n✓ All node agents started and registered!")
     print("\nNode agents running on:")
-    for i in range(1, 5):
-        print(f"  node{i}: http://localhost:{5000 + i}")
+    for nid in expected_nodes:
+        print(f"  {nid}: {registry.get(nid, {}).get('url', 'Unknown')}")
     
     print("\n📝 Log files created:")
-    for i in range(1, 5):
-        print(f"  node_log/node{i}.log")
-        print(f"  node_log/node{i}.err.log")
+    for nid in expected_nodes:
+        print(f"  node_log/{nid}.log")
+        print(f"  node_log/{nid}.err.log")
     
     return processes
 
@@ -102,26 +113,33 @@ async def test_agents_debug():
     print("Testing node agents...")
     print("="*50)
     
+    from core.discovery import get_service_map
+    registry = get_service_map()
     all_healthy = True
     
     async with httpx.AsyncClient(timeout=5.0) as client:  # Use async with
         for i in range(1, 5):
+            node_id = f"node{i}"
+            if node_id not in registry:
+                print(f"✗ {node_id}: not registered!")
+                all_healthy = False
+                continue
             try:
-                response = await client.get(f"http://localhost:{5000 + i}/health")
+                response = await client.get(f"{registry[node_id]['url']}/health")
                 if response.status_code == 200:
                     data = response.json()
-                    print(f"✓ node{i}: healthy (agent: {data.get('agent', 'unknown')})")
+                    print(f"✓ {node_id}: healthy (agent: {data.get('agent', 'unknown')})")
                 else:
-                    print(f"✗ node{i}: unhealthy (status {response.status_code})")
+                    print(f"✗ {node_id}: unhealthy (status {response.status_code})")
                     all_healthy = False
             except Exception as e:
-                print(f"✗ node{i}: not responding ({str(e)})")
+                print(f"✗ {node_id}: not responding ({str(e)})")
                 all_healthy = False
                 
                 # Show recent log entries
-                print(f"\n  Checking logs for node{i}...")
+                print(f"\n  Checking logs for {node_id}...")
                 try:
-                    with open(f"node_log/node{i}.err.log", "r") as f:
+                    with open(f"node_log/{node_id}.err.log", "r") as f:
                         stderr_content = f.read()
                         if stderr_content:
                             print(f"  Last error output:")
@@ -178,6 +196,10 @@ def show_node_logs():
 async def test_single_query():
     """Test a single query and show detailed error info"""
     
+    from core.discovery import get_service_map
+    registry = get_service_map()
+    url = registry.get("node1", {}).get("url", "http://localhost:5001")
+    
     print("\n" + "="*70)
     print("Testing Single Query to node1")
     print("="*70)
@@ -193,7 +215,7 @@ async def test_single_query():
     
     try:
         response = await client.post(
-            "http://localhost:5001/query",
+            f"{url}/query",
             json=test_query
         )
         
@@ -248,6 +270,9 @@ def main():
     
     # Full launch
     try:
+        from core.discovery import _save_registry
+        _save_registry({}) # clear registry on startup
+        
         # Start node agents
         processes = start_node_agents_debug()
         if not processes:

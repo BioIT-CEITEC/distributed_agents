@@ -8,6 +8,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 import pandas as pd
+pd.set_option('future.no_silent_downcasting', True)
 import numpy as np
 from scipy.stats import fisher_exact
 import json
@@ -16,6 +17,7 @@ from flask import Flask, request, jsonify
 import dotenv
 import asyncio
 import os
+import glob
 import sys
 
 # Ensure we can import from potential sibling packages if run directly
@@ -24,6 +26,8 @@ import sys
 from .schema_manager import SchemaManager
 from .schemas import SearchResponse, AnalysisResult
 from skills.node_search.crawler import Crawler
+import socket
+from core.discovery import register_service, deregister_service
 
 dotenv.load_dotenv()  
 
@@ -67,44 +71,82 @@ class NodeResponse(BaseModel):
 class NodeAgentContext:
     """Context for the node agent containing local data"""
     
-    def __init__(self, node_id: str, patient_data_file: str, variant_metadata_file: str = "variant_metadata.json"):
+    def __init__(self, node_id: str, data_directory: str, variant_metadata_file: str = "variant_metadata.json"):
         self.node_id = node_id
         self.logger = logging.getLogger(f"NodeAgent-{node_id}")
         
-        # Load patient data
-        self.patients = pd.read_csv(patient_data_file)
-        
-        # Normalize headers and enforce privacy using SchemaManager
-        schema_manager = SchemaManager(self.logger)
-        self.patients = schema_manager.normalize_dataframe(self.patients)
-        
+        # Load patient data from all CSVs in the directory
+        self.logger.info(f"Loading patient data from directory: {data_directory}")
+        if not os.path.exists(data_directory):
+            self.logger.error(f"Directory not found: {data_directory}")
+            self.patients = pd.DataFrame()
+        else:
+            csv_files = []
+            for root, _, files in os.walk(data_directory):
+                for f in files:
+                    if f.lower().endswith('.csv'):
+                        csv_files.append(os.path.join(root, f))
+            
+            self.logger.info(f"Discovered {len(csv_files)} CSV files: {csv_files}")
+            
+            if not csv_files:
+                self.logger.warning(f"No CSV files found in {data_directory}")
+                self.patients = pd.DataFrame()
+            else:
+                dfs = []
+    
+                for file_path in csv_files:
+                    csv_file = os.path.basename(file_path)
+                    try:
+                        df = pd.read_csv(file_path)
+                        # Normalize headers and enforce privacy using SchemaManager BEFORE concat
+                        schema_manager = SchemaManager(self.logger)
+                        df = schema_manager.normalize_dataframe(df)
+                        dfs.append(df)
+                        self.logger.info(f"Loaded {len(df)} records from {csv_file}")
+                    except Exception as e:
+                        self.logger.error(f"Error loading {csv_file}: {e}")
+                
+                if dfs:
+                    self.patients = pd.concat(dfs, ignore_index=True)
+                else:
+                    self.patients = pd.DataFrame()
+
         # Check if we have a summary 'variants' column but no individual 'rs' columns
         if 'variants' in self.patients.columns:
-            existing_rs = [c for c in self.patients.columns if c.startswith('rs')]
-            if len(existing_rs) == 0:
-                self.logger.info("Exploding 'variants' summary column to individual rsID columns...")
+            # We might have mixed data: some with 'variants', some with 'rs...' columns
+            # We need to ensure we don't overwrite existing rs columns
+            
+            self.logger.info("Exploding 'variants' summary column to individual rsID columns...")
+            
+            # 1. Collect all unique variants
+            all_variants = set()
+            for v_str in self.patients['variants'].dropna():
+                if isinstance(v_str, str):
+                    for v in v_str.split(';'):
+                        if v.strip():
+                            all_variants.add(v.strip())
+            
+            self.logger.info(f"Found {len(all_variants)} unique variants to expand.")
+            
+            # 2. Create/Merge boolean columns
+            for v_id in all_variants:
+                from_summary = self.patients['variants'].apply(
+                    lambda x: v_id in x.split(';') if isinstance(x, str) else False
+                )
                 
-                # 1. Collect all unique variants
-                all_variants = set()
-                for v_str in self.patients['variants'].dropna():
-                    if isinstance(v_str, str):
-                        for v in v_str.split(';'):
-                            if v.strip():
-                                all_variants.add(v.strip())
-                
-                self.logger.info(f"Found {len(all_variants)} unique variants to expand.")
-                
-                # 2. Create boolean columns
-                for v_id in all_variants:
-                    self.patients[v_id] = self.patients['variants'].apply(
-                        lambda x: v_id in x.split(';') if isinstance(x, str) else False
-                    )
+                if v_id in self.patients.columns:
+                    # Merge with existing data (e.g. from other files that had explicit columns)
+                    # self.patients[v_id] likely contains True/False/NaN
+                    self.patients[v_id] = self.patients[v_id].fillna(False).infer_objects(copy=False).astype(bool) | from_summary
+                else:
+                    self.patients[v_id] = from_summary
         
         # Convert boolean columns properly
         bool_columns = ['has_disease'] + [col for col in self.patients.columns if col.startswith('rs')]
         for col in bool_columns:
             if col in self.patients.columns:
-                self.patients[col] = self.patients[col].map({'True': True, 'False': False, True: True, False: False})
+                self.patients[col] = self.patients[col].map({'True': True, 'False': False, True: True, False: False}).fillna(False).infer_objects(copy=False).astype(bool)
         
         # Load variant metadata
         try:
@@ -115,15 +157,14 @@ class NodeAgentContext:
         
         # Get available data
         self.variant_columns = [col for col in self.patients.columns if col.startswith('rs')]
-        self.diseases = list(self.patients['disease'].unique())
+        self.diseases = list(self.patients['disease'].unique()) if 'disease' in self.patients.columns else []
         
         self.logger.info(f"Node {node_id} initialized with {len(self.patients)} patients, "
                         f"{len(self.diseases)} diseases, {len(self.variant_columns)} variants")
 
-        # Initialize Crawler for semantic search (using the node directory based on data file location)
-        node_dir = os.path.dirname(patient_data_file)
-        self.crawler = Crawler(node_dir)
-        self.logger.info(f"Crawler initialized for directory: {node_dir}")
+        # Initialize Crawler for semantic search (using the node directory)
+        self.crawler = Crawler(data_directory)
+        self.logger.info(f"Crawler initialized for directory: {data_directory}")
 
     def cleanup(self):
         """Cleanup resources"""
@@ -403,13 +444,24 @@ async def get_variant_frequencies(
 class NodeAgentServer:
     """Flask server for the node agent"""
     
-    def __init__(self, node_id: str, port: int, patient_data_file: str):
+    def __init__(self, node_id: str, port: int, data_directory: str):
         self.app = Flask(f"node_agent_{node_id}")
-        self.port = port
-        self.context = NodeAgentContext(node_id, patient_data_file)
-        self.logger = logging.getLogger(f"NodeServer-{node_id}")
+        if port == 0:
+            self.port = self._find_free_port()
+        else:
+            self.port = int(port)
         
+        # Eagerly register to unblock orchestrator discovery
+        self.logger = logging.getLogger(f"NodeServer-{node_id}")
+        self.logger.info(f"Node server object created for {node_id} on port {self.port}")
+        
+        self.context = NodeAgentContext(node_id, data_directory)
         self._setup_routes()
+
+    def _find_free_port(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            return s.getsockname()[1]
     
     def _setup_routes(self):
         @self.app.route('/health', methods=['GET'])
@@ -471,11 +523,15 @@ class NodeAgentServer:
         """Cleanup resources"""
         if self.context:
             self.context.cleanup()
+        deregister_service(self.context.node_id)
             
     def run(self):
         try:
             self.logger.info(f"Starting node agent server on port {self.port}")
-            self.app.run(host='0.0.0.0', port=self.port, debug=False)
+            # Register right before starting the HTTP server
+            register_service(self.context.node_id, self.port)
+            from waitress import serve
+            serve(self.app, host='0.0.0.0', port=self.port)
         finally:
             self.cleanup()
 
@@ -484,14 +540,14 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 4:
-        print("Usage: python -m core.node_agent <node_id> <port> <data_file>")
+        print("Usage: python -m core.node_agent <node_id> <port> <data_directory>")
         sys.exit(1)
     
     node_id = sys.argv[1]
     port = int(sys.argv[2])
-    data_file = sys.argv[3]
+    data_directory = sys.argv[3]
     
-    server = NodeAgentServer(node_id, port, data_file)
+    server = NodeAgentServer(node_id, port, data_directory)
     
     # Handle graceful shutdown
     import signal
