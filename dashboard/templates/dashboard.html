@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Orchestration — Metrics Dashboard</title>
+    <meta name="description" content="Interactive observability dashboard for AI orchestration system performance, cost, and agent metrics.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Highcharts CDN (cdnjs) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highcharts/11.4.1/highcharts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highcharts/11.4.1/highcharts-more.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highcharts/11.4.1/modules/accessibility.min.js"></script>
+</head>
+<body>
+    <!-- Header -->
+    <header id="header">
+        <div class="header-left">
+            <div class="logo">◈</div>
+            <div>
+                <h1>AI Orchestration Metrics</h1>
+                <p class="subtitle">Real-time observability dashboard</p>
+            </div>
+        </div>
+        <div class="header-controls">
+            <div class="filter-group">
+                <label for="logFileSelect">Log File</label>
+                <select id="logFileSelect">
+                    <option value="">Loading…</option>
+                </select>
+            </div>
+            <div class="scope-group">
+                <label>Scope</label>
+                <div class="scope-pills" id="scopePills">
+                    <button class="scope-pill active" data-scope="requests">Requests</button>
+                    <button class="scope-pill" data-scope="queries">Queries</button>
+                    <button class="scope-pill" data-scope="traces">Traces</button>
+                </div>
+            </div>
+            <div class="filter-group">
+                <label for="requestFilter">Filter</label>
+                <select id="requestFilter">
+                    <option value="all">All</option>
+                </select>
+            </div>
+            <button id="refreshBtn" class="btn-refresh" title="Refresh Data">⟳</button>
+        </div>
+    </header>
+
+    <!-- Query Selector & Info Panel -->
+    <section id="query-panel" class="query-panel">
+        <div class="query-selector-row">
+            <div class="filter-group">
+                <label for="querySelect">Query</label>
+                <select id="querySelect">
+                    <option value="all">All Queries</option>
+                </select>
+            </div>
+            <div class="query-info" id="queryInfo">
+                <span class="query-text" id="queryText">Select a query to view details</span>
+                <span class="intent-badge" id="intentBadge" style="display:none;"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- KPI Cards -->
+    <section id="kpi-section" class="kpi-grid">
+        <div class="kpi-card" id="kpi-requests">
+            <div class="kpi-icon">📊</div>
+            <div class="kpi-value" id="kpiRequests">—</div>
+            <div class="kpi-label">Total Requests</div>
+            <div class="kpi-sub" id="kpiSpans">— spans</div>
+        </div>
+        <div class="kpi-card" id="kpi-latency">
+            <div class="kpi-icon">⚡</div>
+            <div class="kpi-value" id="kpiLatency">—</div>
+            <div class="kpi-label">Avg E2E Latency</div>
+            <div class="kpi-sub">ms</div>
+        </div>
+        <div class="kpi-card" id="kpi-throughput">
+            <div class="kpi-icon">🔄</div>
+            <div class="kpi-value" id="kpiThroughput">—</div>
+            <div class="kpi-label">Throughput</div>
+            <div class="kpi-sub">req/sec</div>
+        </div>
+        <div class="kpi-card" id="kpi-cost">
+            <div class="kpi-icon">💰</div>
+            <div class="kpi-value" id="kpiCost">—</div>
+            <div class="kpi-label">Total Cost</div>
+            <div class="kpi-sub">USD</div>
+        </div>
+        <div class="kpi-card" id="kpi-success">
+            <div class="kpi-icon">✅</div>
+            <div class="kpi-value" id="kpiSuccess">—</div>
+            <div class="kpi-label">Agent Success</div>
+            <div class="kpi-sub">rate</div>
+        </div>
+        <div class="kpi-card kpi-alert" id="kpi-pii">
+            <div class="kpi-icon">🛡️</div>
+            <div class="kpi-value" id="kpiPii">—</div>
+            <div class="kpi-label">PII Detections</div>
+            <div class="kpi-sub" id="kpiErrors">— errors</div>
+        </div>
+    </section>
+
+    <!-- Charts Grid -->
+    <main class="charts-grid">
+        <!-- Row 1: Latency -->
+        <section class="chart-card wide">
+            <div class="chart-header">
+                <h2>Step-by-Step Latency</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Bar Chart</span>
+                    <span class="meta-formula" title="Formula: span.details.latency.end_to_end_ms per component">
+                        ƒ max(details.latency.end_to_end_ms)
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartStepLatency"></div></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Cost Distribution</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Donut</span>
+                    <span class="meta-formula" title="Formula: sum(details.cost_estimate_usd) grouped by component">
+                        ƒ Σ cost_estimate_usd
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body chart-body-donut"><div id="chartCostDonut"></div></div>
+        </section>
+
+        <!-- Row 2: Timeline + Agents -->
+        <section class="chart-card wide">
+            <div class="chart-header">
+                <h2>Latency Timeline</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Line Chart</span>
+                    <span class="meta-formula" title="Formula: E2E latency over time per request">
+                        ƒ E2E_ms vs timestamp
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartLatencyTimeline"></div></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Agent Success Rate</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Pie</span>
+                    <span class="meta-formula" title="Formula: NodeAgent SYNTHESIS spans with has_data=true / total">
+                        ƒ success / total agents
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body chart-body-donut"><div id="chartAgentSuccess"></div></div>
+        </section>
+
+        <!-- Row 3: Tokens + Safety -->
+        <section class="chart-card wide">
+            <div class="chart-header">
+                <h2>Token Usage per Request</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Bar Chart</span>
+                    <span class="meta-formula" title="Formula: sum(details.usage.prompt_tokens / completion_tokens)">
+                        ƒ Σ prompt + completion tokens
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartTokens"></div></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Safety Alerts</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Donut</span>
+                    <span class="meta-formula" title="PII detections + injection + errors">
+                        ƒ regex PII count + errors
+                    </span>
+                </div>
+            </div>
+            <div class="chart-body chart-body-donut"><div id="chartSafety"></div></div>
+        </section>
+
+        <!-- Row 4: Cost per Request + Nodes -->
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Cost per Request</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Bar Chart</span>
+                    <span class="meta-formula">ƒ Σ details.cost_estimate_usd</span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartCostBar"></div></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Nodes: Queried vs Data</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Bar Chart</span>
+                    <span class="meta-formula">ƒ outputs.nodes_queried vs nodes_with_data</span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartNodes"></div></div>
+        </section>
+
+        <section class="chart-card">
+            <div class="chart-header">
+                <h2>Network Latency by Node</h2>
+                <div class="chart-meta">
+                    <span class="meta-tag">Bar Chart</span>
+                    <span class="meta-formula">ƒ details.network_latency_ms</span>
+                </div>
+            </div>
+            <div class="chart-body"><div id="chartNetworkLatency"></div></div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Source: <code id="footerLogName">—</code> · Generated by AI Orchestration Metrics Engine</p>
+    </footer>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
