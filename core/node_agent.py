@@ -28,6 +28,10 @@ from .schemas import SearchResponse, AnalysisResult
 from skills.node_search.crawler import Crawler
 import socket
 from core.discovery import register_service, deregister_service
+from .structured_logger import StructuredLogger, trace_id_var, span_id_var, parent_span_id_var, request_id_var
+import uuid
+import time
+from datetime import datetime
 
 dotenv.load_dotenv()  
 
@@ -478,9 +482,28 @@ class NodeAgentServer:
                 data = request.json
                 query_text = data.get('query', '')
                 
-                self.logger.info(f"Received query: {query_text}")
+                # Initialize buffer-mode logger (no file I/O — logs are returned to orchestrator)
+                structured_logger = StructuredLogger(
+                    component=f"NodeAgent-{self.context.node_id}",
+                    buffer=True
+                )
                 
-                # Run the agent - use existing event loop or create new one
+                # Distributed tracing: extract all correlation IDs from request headers
+                trace_id = request.headers.get("X-Trace-Id")
+                parent_span_id = request.headers.get("X-Span-Id") or request.headers.get("X-Parent-Span-Id")
+                req_id = request.headers.get("X-Request-Id")
+                
+                trace_id_var.set(trace_id or str(uuid.uuid4()))
+                parent_span_id_var.set(parent_span_id)
+                request_id_var.set(req_id)
+                span = structured_logger.start_span("node_query_handler")
+                
+                structured_logger.log_planning("Received Query", {"query": query_text})
+                
+                self.logger.info(f"Received query: {query_text} [Trace: {trace_id}, Request: {req_id}]")
+                start_time = time.time()
+                
+                # Run the agent
                 import asyncio
                 try:
                     loop = asyncio.get_event_loop()
@@ -494,21 +517,44 @@ class NodeAgentServer:
                     node_agent.run(query_text, deps=self.context)
                 )
                 
-                # Use the improved extraction function
+                end_time = time.time()
+                elapsed_ms = (end_time - start_time) * 1000
+                
+                # Telemetry
+                usage = result.usage() if hasattr(result, 'usage') else None
+                if usage:
+                    structured_logger.log_telemetry(
+                        model="openai:gpt-4o",
+                        prompt_tokens=getattr(usage, 'request_tokens', 0) or 0,
+                        completion_tokens=getattr(usage, 'response_tokens', 0) or 0,
+                        duration_ms=elapsed_ms
+                    )
+                
+                # Extract structured response
                 response_dict = extract_agent_result(result, self.logger)
                 
                 if response_dict:
                     self.logger.info(f"Successfully extracted response: {list(response_dict.keys())}")
+                    structured_logger.log_synthesis("Node query successful", {"status": "SUCCESS", "has_data": response_dict.get("has_data")})
+                    # Embed buffered trace logs in the response for orchestrator consolidation
+                    response_dict["_trace_logs"] = structured_logger.flush_buffer()
                     return jsonify(response_dict)
                 else:
+                    structured_logger.log_synthesis("Node query failed extraction", {"status": "FAILURE"})
                     return jsonify({
                         "node_id": self.context.node_id,
                         "has_data": False,
                         "message": f"Could not extract structured response.",
-                        "results": None
+                        "results": None,
+                        "_trace_logs": structured_logger.flush_buffer()
                     })
                     
             except Exception as e:
+                trace_logs = []
+                if 'structured_logger' in locals():
+                    structured_logger.log_event("ERROR", "SYNTHESIS", "Node execution exception", exception=str(e), status="FAILURE")
+                    trace_logs = structured_logger.flush_buffer()
+                    
                 self.logger.error(f"Error handling query: {e}")
                 import traceback
                 traceback.print_exc()
@@ -516,8 +562,13 @@ class NodeAgentServer:
                     "node_id": self.context.node_id,
                     "has_data": False,
                     "message": f"Error: {str(e)}",
-                    "results": None
+                    "results": None,
+                    "_trace_logs": trace_logs
                 }), 500
+            finally:
+                span_id_var.set(None)
+                trace_id_var.set(None)
+                request_id_var.set(None)
     
     def cleanup(self):
         """Cleanup resources"""

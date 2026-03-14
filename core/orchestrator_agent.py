@@ -23,6 +23,9 @@ from pathlib import Path
 import dotenv
 from .schema_manager import SchemaManager
 from .schemas import SearchResponse, AnalysisResult
+from .structured_logger import StructuredLogger, trace_id_var, span_id_var, parent_span_id_var, request_id_var
+import uuid
+import time
 
 import pandas as pd
 pd.set_option('future.no_silent_downcasting', True)
@@ -52,108 +55,8 @@ logging.basicConfig(
 # Response Logger
 # ============================================================================
 
-class ResponseLogger:
-    """Logs all agent responses and tool outputs to file and console"""
-    
-    def __init__(self, enabled: bool = True):
-        self.enabled = enabled
-        self.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_file = None
-        self.logger = logging.getLogger("ResponseLogger")
-        
-        if enabled:
-            LOG_DIR.mkdir(exist_ok=True)
-            self.log_file = LOG_DIR / f"investigation_{self.session_id}.json"
-            self.entries = []
-            self.logger.info(f"Response logging enabled: {self.log_file}")
-    
-    def log_tool_call(self, tool_name: str, inputs: Dict, outputs: Dict):
-        """Log a tool call with inputs and outputs"""
-        if not self.enabled:
-            return
-        
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": "tool_call",
-            "tool": tool_name,
-            "inputs": self._sanitize(inputs),
-            "outputs": self._sanitize(outputs)
-        }
-        self.entries.append(entry)
-        self.logger.info(f"Tool [{tool_name}] called with {list(inputs.keys())}")
-        self.logger.debug(f"Tool [{tool_name}] output: {json.dumps(outputs, default=str)[:500]}")
-    
-    def log_external_response(self, node_id: str, response: Dict):
-        """Log response from external node"""
-        if not self.enabled:
-            return
-        
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": "external_node_response",
-            "node_id": node_id,
-            "has_data": response.get("has_data"),
-            "response": self._sanitize(response)
-        }
-        self.entries.append(entry)
-        self.logger.debug(f"External node [{node_id}] response: has_data={response.get('has_data')}")
-    
-    def log_llm_decision(self, decision: str, context: Dict = None):
-        """Log LLM decision points"""
-        if not self.enabled:
-            return
-        
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": "llm_decision",
-            "decision": decision,
-            "context": self._sanitize(context) if context else {}
-        }
-        self.entries.append(entry)
-        self.logger.info(f"LLM Decision: {decision}")
-    
-    def log_final_result(self, result: Dict):
-        """Log the final investigation result"""
-        if not self.enabled:
-            return
-        
-        entry = {
-            "timestamp": datetime.now().isoformat(),
-            "type": "final_result",
-            "result": self._sanitize(result)
-        }
-        self.entries.append(entry)
-        self.logger.info(f"Investigation complete. Log saved to {self.log_file}")
-        self._save_to_file()
-    
-    def _sanitize(self, obj):
-        """Convert objects to JSON-serializable format"""
-        if isinstance(obj, dict):
-            return {k: self._sanitize(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [self._sanitize(v) for v in obj]
-        elif isinstance(obj, (np.integer, np.floating)):
-            return float(obj)
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif hasattr(obj, 'model_dump'):
-            return obj.model_dump()
-        else:
-            try:
-                json.dumps(obj)
-                return obj
-            except:
-                return str(obj)
-    
-    def _save_to_file(self):
-        """Save all entries to JSON file"""
-        if self.log_file:
-            with open(self.log_file, 'w') as f:
-                json.dump(self.entries, f, indent=2, default=str)
-
-
-# Global response logger instance
-response_logger = ResponseLogger(enabled=LOG_RESPONSES)
+# We instantiate this locally in the orchestrator interface to assign session files dynamically
+# So we don't have a global logger anymore, and we pass the logger into tools via context.
 
 
 def extract_agent_result(result, expected_type=None, logger=None) -> Optional[Dict]:
@@ -236,10 +139,12 @@ class ExtendedOrchestratorContext:
         self, 
         external_node_urls: Dict[str, str] = None,
         home_node_data_directory: str = "nodes/node1",
-        variant_metadata_file: str = "variant_metadata.json"
+        variant_metadata_file: str = "variant_metadata.json",
+        structured_logger: Optional[StructuredLogger] = None
     ):
         self.external_node_urls = external_node_urls or {}
         self._refresh_nodes()
+        self.structured_logger = structured_logger
         self.logger = logging.getLogger("ExtendedOrchestrator")
         self.client = httpx.AsyncClient(timeout=30.0)
         
@@ -347,8 +252,11 @@ class ExtendedOrchestratorContext:
             raise StopIteration(f"Investigation stopped: exceeded {MAX_INVESTIGATION_STEPS} steps")
         
         self.investigation_steps.append(step)
-        self.logger.info(f"Investigation step {self.step_count}/{MAX_INVESTIGATION_STEPS}: {step}")
-        response_logger.log_llm_decision(f"Step {self.step_count}: {step}")
+        if self.structured_logger:
+            self.structured_logger.log_acting(f"Step {self.step_count}: {step}", {})
+        else:
+            self.logger.info(f"Investigation step {self.step_count}/{MAX_INVESTIGATION_STEPS}: {step}")
+
     
     def clear_steps(self):
         """Clear investigation steps for new query"""
@@ -376,24 +284,57 @@ class ExtendedOrchestratorContext:
         
         try:
             url = f"{self.external_node_urls[node_id]}/query"
+            
+            # Propagate trace context to the node via HTTP headers
+            headers = {}
+            if trace_id_var.get():
+                headers["X-Trace-Id"] = trace_id_var.get()
+            if span_id_var.get():
+                headers["X-Parent-Span-Id"] = span_id_var.get()
+            if request_id_var.get():
+                headers["X-Request-Id"] = request_id_var.get()
+            
+            # Sub-span for this node's network call
+            node_span = str(uuid.uuid4())
+            headers["X-Span-Id"] = node_span
+            
+            if self.structured_logger:
+                 self.structured_logger.log_acting(f"Dispatching query to {node_id}", {"url": url, "query": query})
+            
+            start_time = time.time()
             response = await self.client.post(
                 url,
-                json={"query": query, "context": {}}
+                json={"query": query, "context": {}},
+                headers=headers
             )
+            elapsed_ms = (time.time() - start_time) * 1000
             
             if response.status_code == 200:
                 result = response.json()
-                response_logger.log_external_response(node_id, result)
+                
+                # Ingest node's buffered trace logs into the consolidated log
+                remote_logs = result.pop("_trace_logs", [])
+                if remote_logs and self.structured_logger:
+                    self.structured_logger.ingest_remote_logs(remote_logs)
+                
+                if self.structured_logger:
+                    self.structured_logger.log_acting(f"Received response from {node_id}", {
+                        "status": 200, "node_id": node_id,
+                        "has_data": result.get("has_data"),
+                        "network_latency_ms": round(elapsed_ms, 2)
+                    })
                 return result
             else:
-                error_result = {"node_id": node_id, "has_data": False, "message": f"HTTP {response.status_code}"}
-                response_logger.log_external_response(node_id, error_result)
-                return error_result
+                if self.structured_logger:
+                     self.structured_logger.log_event("ERROR", "ACTING", f"HTTP error from {node_id}",
+                         node_id=node_id, status_code=response.status_code)
+                return {"node_id": node_id, "has_data": False, "message": f"HTTP {response.status_code}"}
                 
         except Exception as e:
-            error_result = {"node_id": node_id, "has_data": False, "message": str(e)}
-            response_logger.log_external_response(node_id, error_result)
-            return error_result
+            if self.structured_logger:
+                 self.structured_logger.log_event("ERROR", "ACTING", f"Exception querying {node_id}",
+                     error_detail=str(e), node_id=node_id)
+            return {"node_id": node_id, "has_data": False, "message": str(e)}
     
     def _refresh_nodes(self):
         try:
@@ -502,8 +443,8 @@ async def check_home_patients_for_variant(
     
     if variant_id not in ctx.deps.home_variant_columns:
         result = {"error": f"Variant {variant_id} not in home node data"}
-        response_logger.log_tool_call("check_home_patients_for_variant", 
-                                      {"variant_id": variant_id, "disease": disease}, result)
+        if ctx.deps.structured_logger:
+            ctx.deps.structured_logger.log_acting("check_home_patients_for_variant", {"inputs": {"variant_id": variant_id, "disease": disease}, "outputs": result})
         return result
     
     df = ctx.deps.home_patients
@@ -535,8 +476,9 @@ async def check_home_patients_for_variant(
         "has_more": len(patient_list) > 20
     }
     
-    response_logger.log_tool_call("check_home_patients_for_variant",
-                                  {"variant_id": variant_id, "disease": disease}, result)
+    if ctx.deps.structured_logger:
+        ctx.deps.structured_logger.log_acting("check_home_patients_for_variant", {"inputs": {"variant_id": variant_id, "disease": disease}, "outputs": {"found": len(patient_list), "checked": len(df)}})
+    
     return result
 
 
@@ -705,8 +647,8 @@ async def query_external_nodes_fisher(
             "nodes_with_data": 0,
             "error": "No external nodes had data for this query"
         }
-        response_logger.log_tool_call("query_external_nodes_fisher",
-                                      {"variant_id": variant_id, "disease": disease}, result)
+        if ctx.deps.structured_logger:
+             ctx.deps.structured_logger.log_acting("query_external_nodes_fisher completed", {"outputs": result})
         return result
     
     # Combine p-values (Fisher's method)
@@ -733,8 +675,9 @@ async def query_external_nodes_fisher(
         "interpretation": "Significant" if combined_p and combined_p < 0.05 else "Not significant"
     }
     
-    response_logger.log_tool_call("query_external_nodes_fisher",
-                                  {"variant_id": variant_id, "disease": disease}, result)
+    if ctx.deps.structured_logger:
+         ctx.deps.structured_logger.log_acting("query_external_nodes_fisher completed", {"outputs": result})
+        
     return result
 
 
@@ -789,7 +732,7 @@ async def query_external_nodes_cooccurrence(
     
     aggregated.sort(key=lambda x: x['avg_co_occurrence_rate'], reverse=True)
     
-    return {
+    result = {
         "primary_variant": variant_id,
         "disease": disease,
         "nodes_queried": len(responses),
@@ -797,6 +740,15 @@ async def query_external_nodes_cooccurrence(
         "co_occurring_variants": aggregated[:15],
         "total_unique_variants_found": len(aggregated)
     }
+    
+    if ctx.deps.structured_logger:
+        ctx.deps.structured_logger.log_acting("query_external_nodes_cooccurrence completed", {
+            "tool_name": "query_external_nodes_cooccurrence",
+            "tool_args": {"variant_id": variant_id, "disease": disease},
+            "outputs": {"nodes_queried": result["nodes_queried"], "nodes_with_data": result["nodes_with_data"], "unique_variants_found": result["total_unique_variants_found"]}
+        })
+    
+    return result
 
 
 @extended_orchestrator.tool
@@ -826,7 +778,7 @@ async def query_external_nodes_variant_pair(
                 'results': resp.get('results', [])
             })
     
-    return {
+    result = {
         "variant_a": variant_a,
         "variant_b": variant_b,
         "disease": disease,
@@ -834,6 +786,15 @@ async def query_external_nodes_variant_pair(
         "nodes_responded": len(findings),
         "findings": findings
     }
+    
+    if ctx.deps.structured_logger:
+        ctx.deps.structured_logger.log_acting("query_external_nodes_variant_pair completed", {
+            "tool_name": "query_external_nodes_variant_pair",
+            "tool_args": {"variant_a": variant_a, "variant_b": variant_b, "disease": disease},
+            "outputs": {"nodes_queried": result["nodes_queried"], "nodes_responded": result["nodes_responded"]}
+        })
+    
+    return result
 
 
 # ============================================================================
@@ -873,14 +834,25 @@ class ExtendedOrchestratorInterface:
         home_node_data_directory: str = "nodes/node1",
         variant_metadata_file: str = "variant_metadata.json"
     ):
+        # Setup consolidated structured logger (single file for orchestrator + ingested node logs)
+        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.session_log_file = LOG_DIR / f"Investigation_{session_id}.json"
+        
+        self.structured_logger = StructuredLogger(
+            component="Orchestrator",
+            log_file=str(self.session_log_file)
+        )
+        
         self.context = ExtendedOrchestratorContext(
             external_node_urls,
             home_node_data_directory,
-            variant_metadata_file
+            variant_metadata_file,
+            structured_logger=self.structured_logger
         )
         self.logger = logging.getLogger("ExtendedOrchestratorInterface")
         
     def _classify_intent(self, query: str) -> str:
+        """Classify user query intent and log the routing decision."""
         import re
         
         # 1. Personal-information or identifiable-individual queries (restricted)
@@ -893,17 +865,24 @@ class ExtendedOrchestratorInterface:
         
         # Specific check for test case
         if "jing thomas" in query.lower():
+            self.structured_logger.log_planning("Routing Decision", {"intent": "personal", "reason": "Hardcoded PII name match", "query": query})
             return "personal"
             
         for pattern in pii_patterns:
-            if re.search(pattern, query):
+            match = re.search(pattern, query)
+            if match:
+                self.structured_logger.log_planning("Routing Decision", {"intent": "personal", "reason": f"PII pattern matched: {pattern}", "matched_text": match.group(0), "query": query})
                 return "personal"
                 
         # 2. Aggregated, anonymized statistical queries (allowed)
         analytical_keywords = ['total number', 'count', 'how many', 'statistics', 'percentage', 'age range', 'between', 'average', 'patient counts']
-        if any(kw in query.lower() for kw in analytical_keywords):
+        matched_keywords = [kw for kw in analytical_keywords if kw in query.lower()]
+        if matched_keywords:
+            self.structured_logger.log_planning("Routing Decision", {"intent": "analytical", "reason": f"Analytical keywords matched: {matched_keywords}", "query": query})
             return "analytical"
-            
+        
+        # 3. Default: investigation
+        self.structured_logger.log_planning("Routing Decision", {"intent": "investigation", "reason": "No PII or analytical keywords matched, defaulting to investigation", "query": query})
         return "investigation"
         
     async def investigate(self, query: str) -> Dict[str, Any]:
@@ -914,11 +893,19 @@ class ExtendedOrchestratorInterface:
         self.logger.info(f"Processing query: {query}")
         self.context.clear_steps()
         
+        start_time = time.time()
+        
+        # Ensure we have a trace wrapper
+        trace = self.structured_logger.init_trace()
+        span = self.structured_logger.start_span("orchestrator_investigate")
+        
         intent = self._classify_intent(query)
+        self.structured_logger.log_planning("Goal Parsing", {"query": query, "intent": intent})
         self.logger.info(f"Query intent classified as: {intent}")
         
         if intent == "personal":
             self.logger.warning(f"Privacy violation detected in query: {query}")
+            self.structured_logger.log_event("WARN", "PLANNING", "Privacy violation blocked", query=query)
             return {
                 "investigation_summary": "We do not have data on the mentioned name.",
                 "requires_further_investigation": False
@@ -927,21 +914,35 @@ class ExtendedOrchestratorInterface:
         try:
             if intent == "analytical":
                 self.logger.info("Routing to analytical orchestrator...")
-                # Run the analytical agent instead of the extended orchestrator loop
+                self.structured_logger.log_planning("Routing Logic", {"selected": "analytical_orchestrator", "reason": "Query requests total counts/distributions"})
                 result = await analytical_orchestrator.run(query, deps=self.context)
             else:
                 self.logger.info("Routing to extended orchestrator investigation loop...")
-                # Run the extended agent
+                self.structured_logger.log_planning("Routing Logic", {"selected": "extended_orchestrator", "reason": "Query is investigative requiring iteration"})
                 result = await extended_orchestrator.run(query, deps=self.context)
+            
+            end_time = time.time()
+            elapsed_ms = (end_time - start_time) * 1000
+            
+            # Telemetry mapping
+            usage = result.usage() if hasattr(result, 'usage') else None
+            if usage:
+                self.structured_logger.log_telemetry(
+                    model="openai:gpt-4o",
+                    prompt_tokens=getattr(usage, 'request_tokens', 0) or 0,
+                    completion_tokens=getattr(usage, 'response_tokens', 0) or 0,
+                    duration_ms=elapsed_ms
+                )
             
             # Extract result
             data = extract_agent_result(result, expected_type=InvestigationResult, logger=self.logger)
             
             if data:
-                response_logger.log_final_result(data)
+                self.structured_logger.log_synthesis("Investigation complete", {"result_summary": data.get("investigation_summary")})
                 return data
             else:
                 self.logger.error("Could not extract structured result from agent")
+                self.structured_logger.log_event("ERROR", "SYNTHESIS", "Extraction failed")
                 return {
                     "investigation_summary": "Error: Could not extract structured result.",
                     "requires_further_investigation": True
@@ -949,12 +950,18 @@ class ExtendedOrchestratorInterface:
                 
         except Exception as e:
             self.logger.error(f"Investigation failed: {e}")
+            self.structured_logger.log_event("ERROR", "SYNTHESIS", "Investigation failed Exception", exception=str(e))
             import traceback
             traceback.print_exc()
             return {
                 "investigation_summary": f"Error during investigation: {str(e)}",
                 "requires_further_investigation": True
             }
+        finally:
+             # Reset all trace context for safety between requests
+             span_id_var.set(None)
+             trace_id_var.set(None)
+             request_id_var.set(None)
         
     async def close(self):
         """Close the orchestrator context"""
@@ -996,8 +1003,6 @@ class ExtendedOrchestratorInterface:
                         print("\nRecommendations:")
                         for rec in data.get('recommendations'):
                             print(f"- {rec}")
-                    
-                    response_logger.log_final_result(data)
                 else:
                     print("\nError: Could not extract structured result from agent.")
                     print(f"Raw Result: {result}")
