@@ -17,14 +17,19 @@ logs/
 node_logs/
 node_log/
 testfolder/
+memory-bank/
+
 # Temporary scripts
 demo_agentic.py
 check_api.py
 diagnose_pydantic_ai.py
 
-# Temporary markdown files
+# Temporary markdown files and folder and session memory
 markdown/*
+claude_session_memory.md
+description.md
+MEMORY.md
+intent_classifier.md
 
 # Temporary word files
 documents/*
-
