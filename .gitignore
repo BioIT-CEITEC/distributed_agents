@@ -30,6 +30,7 @@ claude_session_memory.md
 description.md
 MEMORY.md
 intent_classifier.md
+guardrail_architecture.md
 
 # Temporary word files
 documents/*
